@@ -673,6 +673,7 @@ public class MachineLearningPlugin extends Plugin
         conversationIndexMemoryFactory.init(client, mlIndicesHandler, memoryManager);
         memoryFactoryMap.put(ConversationIndexMemory.TYPE, conversationIndexMemoryFactory);
 
+
         MLAgentExecutor agentExecutor = new MLAgentExecutor(
             client,
             sdkClient,
