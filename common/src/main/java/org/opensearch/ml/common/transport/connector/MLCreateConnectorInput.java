@@ -76,7 +76,7 @@ public class MLCreateConnectorInput implements ToXContentObject, Writeable {
     private ConnectorClientConfig connectorClientConfig;
 
     private String url;
-    private Map<String,String> headers;
+    private Map<String, String> headers;
 
     @Builder(toBuilder = true)
     public MLCreateConnectorInput(
@@ -340,7 +340,7 @@ public class MLCreateConnectorInput implements ToXContentObject, Writeable {
         if (streamOutputVersion.onOrAfter(VERSION_2_19_1)) {
             output.writeOptionalString(url);
         }
-        if(streamOutputVersion.after(VERSION_2_19_1)){
+        if (streamOutputVersion.after(VERSION_2_19_1)) {
             if (headers != null) {
                 output.writeBoolean(true);
                 output.writeMap(headers, StreamOutput::writeString, StreamOutput::writeString);
@@ -385,7 +385,7 @@ public class MLCreateConnectorInput implements ToXContentObject, Writeable {
         }
         this.tenantId = streamInputVersion.onOrAfter(VERSION_2_19_0) ? input.readOptionalString() : null;
         this.url = streamInputVersion.onOrAfter(VERSION_2_19_1) ? input.readOptionalString() : null;
-        if(streamInputVersion.onOrAfter(VERSION_2_19_1)){
+        if (streamInputVersion.onOrAfter(VERSION_2_19_1)) {
             if (input.readBoolean()) {
                 this.headers = input.readMap(s -> s.readString(), s -> s.readString());
             }

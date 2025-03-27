@@ -1,14 +1,19 @@
 package org.opensearch.ml.engine.algorithms.remote;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.gson.Gson;
-import io.modelcontextprotocol.client.McpClient;
-import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
-import io.modelcontextprotocol.spec.ClientMcpTransport;
-import io.modelcontextprotocol.spec.McpSchema;
-import lombok.Getter;
-import lombok.extern.log4j.Log4j2;
+import static org.opensearch.ml.common.connector.ConnectorProtocols.MCP_SSE;
+
+import java.net.http.HttpClient;
+import java.security.AccessController;
+import java.security.PrivilegedExceptionAction;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import org.apache.logging.log4j.Logger;
 import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.util.TokenBucket;
@@ -24,19 +29,17 @@ import org.opensearch.ml.engine.annotation.ConnectorExecutor;
 import org.opensearch.script.ScriptService;
 import org.opensearch.transport.client.Client;
 
-import java.net.http.HttpClient;
-import java.security.AccessController;
-import java.security.PrivilegedExceptionAction;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
 
-import static org.opensearch.ml.common.connector.ConnectorProtocols.MCP_SSE;
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
+import io.modelcontextprotocol.spec.ClientMcpTransport;
+import io.modelcontextprotocol.spec.McpSchema;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 @ConnectorExecutor(MCP_SSE)
@@ -44,12 +47,20 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
 
     @Getter
     private McpConnector connector;
+    @Setter
+    @Getter
+    private TokenBucket rateLimiter;
+    @Setter
+    @Getter
+    private Map<String, TokenBucket> userRateLimiterMap;
+    @Setter
+    @Getter
+    private MLGuard mlGuard;
 
     public McpConnectorExecutor(Connector connector) {
         super.initialize(connector);
         this.connector = (McpConnector) connector;
-        Duration connectionTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getConnectionTimeout());
-        Duration readTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getReadTimeout());
+
         Integer maxConnection = super.getConnectorClientConfig().getMaxConnections();
     }
 
@@ -66,32 +77,29 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
                     return thread;
                 });
 
+                Duration connectionTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getConnectionTimeout());
+                Duration readTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getReadTimeout());
+
                 // Build HTTP client with proper configuration
-                HttpClient httpClient = HttpClient.newBuilder()
-                        .executor(executor)
-                        .connectTimeout(Duration.ofSeconds(300))
-                        .build();
+                HttpClient httpClient = HttpClient.newBuilder().executor(executor).connectTimeout(connectionTimeout).build();
 
                 // Create transport with the HTTP client
-                ClientMcpTransport transport = new HttpClientSseClientTransport(
-                        httpClient,
-                        mcpServerUrl,
-                        new ObjectMapper()
-                );
+                ClientMcpTransport transport = new HttpClientSseClientTransport(httpClient, mcpServerUrl, new ObjectMapper());
 
                 // Create and initialize client
-                McpSyncClient client = McpClient.sync(transport)
-                        .requestTimeout(Duration.ofSeconds(30))
-                        .capabilities(McpSchema.ClientCapabilities.builder()
-                                .roots(false)
-                                .sampling()
-                                .build())
-                        .sampling(request -> new McpSchema.CreateMessageResult(
-                                McpSchema.Role.USER,
-                                new McpSchema.TextContent("test"),
-                                "Claude3.7",
-                                McpSchema.CreateMessageResult.StopReason.END_TURN))
-                        .build();
+                McpSyncClient client = McpClient
+                    .sync(transport)
+                    .requestTimeout(readTimeout)
+                    .capabilities(McpSchema.ClientCapabilities.builder().roots(false).sampling().build())
+                    .sampling(
+                        request -> new McpSchema.CreateMessageResult(
+                            McpSchema.Role.USER,
+                            new McpSchema.TextContent("test"),
+                            "Claude3.7",
+                            McpSchema.CreateMessageResult.StopReason.END_TURN
+                        )
+                    )
+                    .build();
 
                 client.initialize();
                 McpSchema.ListToolsResult tools = client.listTools();
@@ -111,17 +119,18 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
                     for (Object key : toolMap.keySet()) {
                         String keyStr = (String) key;
                         if (!basicMetaFields.contains(keyStr)) {
-                            //TODO: change to more flexible way
+                            // TODO: change to more flexible way
                             attributes.put("input_schema", StringUtils.toJson(toolMap.get(keyStr)));
                         }
                     }
 
-                    MLToolSpec mlToolSpec = MLToolSpec.builder()
-                            .type("McpSseTool")
-                            .name(toolMap.get("name").toString())
-                            .description(StringUtils.processTextDoc(toolMap.get("description").toString()))
-                            .attributes(attributes)
-                            .build();
+                    MLToolSpec mlToolSpec = MLToolSpec
+                        .builder()
+                        .type("McpSseTool")
+                        .name(toolMap.get("name").toString())
+                        .description(StringUtils.processTextDoc(toolMap.get("description").toString()))
+                        .attributes(attributes)
+                        .build();
                     mlToolSpec.addRuntimeResource("mcp_client", client);
                     mcpToolSpecs.add(mlToolSpec);
                 }
@@ -137,28 +146,12 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
 
     @Override
     public ScriptService getScriptService() {
-        return null;
-    }
-
-
-    @Override
-    public TokenBucket getRateLimiter() {
-        return null;
-    }
-
-    @Override
-    public Map<String, TokenBucket> getUserRateLimiterMap() {
-        return Map.of();
-    }
-
-    @Override
-    public MLGuard getMlGuard() {
-        return null;
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public Client getClient() {
-        return null;
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
@@ -166,9 +159,15 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
         return log;
     }
 
-
     @Override
-    public void invokeRemoteService(String action, MLInput mlInput, Map<String, String> parameters, String payload, ExecutionContext executionContext, ActionListener<Tuple<Integer, ModelTensors>> actionListener) {
-
+    public void invokeRemoteService(
+        String action,
+        MLInput mlInput,
+        Map<String, String> parameters,
+        String payload,
+        ExecutionContext executionContext,
+        ActionListener<Tuple<Integer, ModelTensors>> actionListener
+    ) {
+        throw new UnsupportedOperationException("Not implemented.");
     }
 }

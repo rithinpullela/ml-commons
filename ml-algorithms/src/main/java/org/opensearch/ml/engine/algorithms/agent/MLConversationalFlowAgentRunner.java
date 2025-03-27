@@ -73,8 +73,6 @@ public class MLConversationalFlowAgentRunner implements MLAgentRunner {
     private Map<String, Tool.Factory> toolFactories;
     private Map<String, Memory.Factory> memoryFactoryMap;
 
-
-
     public MLConversationalFlowAgentRunner(
         Client client,
         Settings settings,
@@ -147,12 +145,12 @@ public class MLConversationalFlowAgentRunner implements MLAgentRunner {
     }
 
     private void runAgent(
-            MLAgent mlAgent,
-            Map<String, String> params,
-            ActionListener<Object> listener,
-            ConversationIndexMemory memory,
-            String memoryId,
-            String parentInteractionId
+        MLAgent mlAgent,
+        Map<String, String> params,
+        ActionListener<Object> listener,
+        ConversationIndexMemory memory,
+        String memoryId,
+        String parentInteractionId
     ) {
 
         StepListener<Object> firstStepListener = null;
@@ -161,7 +159,7 @@ public class MLConversationalFlowAgentRunner implements MLAgentRunner {
         Map<String, String> firstToolExecuteParams = null;
         StepListener<Object> previousStepListener = null;
         Map<String, Object> additionalInfo = new ConcurrentHashMap<>();
-        List<MLToolSpec> toolSpecs = getMlToolSpecs(mlAgent, params, client, clusterService, xContentRegistry);
+        List<MLToolSpec> toolSpecs = getMlToolSpecs(mlAgent, params, client);
 
         if (toolSpecs == null || toolSpecs.isEmpty()) {
             listener.onFailure(new IllegalArgumentException("no tool configured"));
@@ -188,21 +186,21 @@ public class MLConversationalFlowAgentRunner implements MLAgentRunner {
                 int finalI = i;
                 previousStepListener.whenComplete(output -> {
                     processOutput(
-                            params,
-                            listener,
-                            memory,
-                            memoryId,
-                            parentInteractionId,
-                            toolSpecs,
-                            flowAgentOutput,
-                            additionalInfo,
-                            traceNumber,
-                            memorySpec,
-                            previousToolSpec,
-                            finalI,
-                            output,
-                            mlAgent.getTenantId(),
-                            nextStepListener
+                        params,
+                        listener,
+                        memory,
+                        memoryId,
+                        parentInteractionId,
+                        toolSpecs,
+                        flowAgentOutput,
+                        additionalInfo,
+                        traceNumber,
+                        memorySpec,
+                        previousToolSpec,
+                        finalI,
+                        output,
+                        mlAgent.getTenantId(),
+                        nextStepListener
                     );
                 }, e -> {
                     log.error("Failed to run flow agent", e);
@@ -215,21 +213,21 @@ public class MLConversationalFlowAgentRunner implements MLAgentRunner {
             firstTool.run(firstToolExecuteParams, ActionListener.wrap(output -> {
                 MLToolSpec toolSpec = toolSpecs.get(0);
                 processOutput(
-                        params,
-                        listener,
-                        memory,
-                        memoryId,
-                        parentInteractionId,
-                        toolSpecs,
-                        flowAgentOutput,
-                        additionalInfo,
-                        traceNumber,
-                        memorySpec,
-                        toolSpec,
-                        1,
-                        output,
-                        mlAgent.getTenantId(),
-                        null
+                    params,
+                    listener,
+                    memory,
+                    memoryId,
+                    parentInteractionId,
+                    toolSpecs,
+                    flowAgentOutput,
+                    additionalInfo,
+                    traceNumber,
+                    memorySpec,
+                    toolSpec,
+                    1,
+                    output,
+                    mlAgent.getTenantId(),
+                    null
                 );
             }, e -> { listener.onFailure(e); }));
         } else {

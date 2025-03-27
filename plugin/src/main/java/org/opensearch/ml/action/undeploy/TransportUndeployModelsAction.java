@@ -18,7 +18,6 @@ import org.opensearch.ExceptionsHelper;
 import org.opensearch.OpenSearchStatusException;
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.bulk.BulkRequest;
-import org.opensearch.action.bulk.BulkResponse;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.support.ActionFilters;
@@ -42,6 +41,7 @@ import org.opensearch.ml.common.MLModel;
 import org.opensearch.ml.common.model.MLModelState;
 import org.opensearch.ml.common.transport.deploy.MLDeployModelRequest;
 import org.opensearch.ml.common.transport.undeploy.MLUndeployModelAction;
+import org.opensearch.ml.common.transport.undeploy.MLUndeployModelNodeResponse;
 import org.opensearch.ml.common.transport.undeploy.MLUndeployModelNodesRequest;
 import org.opensearch.ml.common.transport.undeploy.MLUndeployModelNodesResponse;
 import org.opensearch.ml.common.transport.undeploy.MLUndeployModelsAction;
@@ -244,30 +244,92 @@ public class TransportUndeployModelsAction extends HandledTransportAction<Action
         bulkUpdateRequest.setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
         log.info("No nodes running these models: {}", Arrays.toString(modelIds));
 
-        try (ThreadContext.StoredContext threadContext = client.threadPool().getThreadContext().stashContext()) {
-            ActionListener<MLUndeployModelsResponse> listenerWithContextRestoration = ActionListener
-                .runBefore(listener, () -> threadContext.restore());
-            ActionListener<BulkResponse> bulkResponseListener = ActionListener.wrap(br -> {
-                log.debug("Successfully set the following modelId(s) to UNDEPLOY in index: {}", Arrays.toString(modelIds));
-                listenerWithContextRestoration.onResponse(new MLUndeployModelsResponse(response));
-            }, e -> {
-                String modelsNotFoundMessage = String
-                    .format("Failed to set the following modelId(s) to UNDEPLOY in index: %s", Arrays.toString(modelIds));
-                log.error(modelsNotFoundMessage, e);
+        // Execute bulk update with verification
+        client.bulk(bulkUpdateRequest, ActionListener.wrap(bulkResponse -> {
+            if (bulkResponse.hasFailures()) {
+                log.error("Failed to update model state in index: {}", bulkResponse.buildFailureMessage());
+                listener
+                    .onFailure(new OpenSearchStatusException("Failed to update model state in index", RestStatus.INTERNAL_SERVER_ERROR));
+                return;
+            }
 
-                OpenSearchStatusException exception = new OpenSearchStatusException(
-                    modelsNotFoundMessage + e.getMessage(),
-                    RestStatus.INTERNAL_SERVER_ERROR
-                );
-                listenerWithContextRestoration.onFailure(exception);
-            });
-
-            client.bulk(bulkUpdateRequest, bulkResponseListener);
-        } catch (Exception e) {
-            log.error("Unexpected error while setting the following modelId(s) to UNDEPLOY in index: {}", Arrays.toString(modelIds), e);
+            // Verify that models are actually undeployed on all nodes
+            verifyModelUndeployment(modelIds, listener);
+        }, e -> {
+            log.error("Failed to update model state in index", e);
             listener.onFailure(e);
+        }));
+    }
+
+    private void verifyModelUndeployment(String[] modelIds, ActionListener<MLUndeployModelsResponse> listener) {
+        // Create a new request to check model deployment status
+        MLUndeployModelNodesRequest verifyRequest = new MLUndeployModelNodesRequest(
+            clusterService.state().nodes().getNodes().keySet().toArray(new String[0]),
+            modelIds
+        );
+
+        // Execute verification request
+        client.execute(MLUndeployModelAction.INSTANCE, verifyRequest, ActionListener.wrap(verifyResponse -> {
+            boolean allUndeployed = true;
+            for (MLUndeployModelNodeResponse nodeResponse : verifyResponse.getNodes()) {
+                Map<String, String> modelStatus = nodeResponse.getModelUndeployStatus();
+                for (String modelId : modelIds) {
+                    String status = modelStatus.get(modelId);
+                    if (status != null && !status.equals(NOT_FOUND)) {
+                        allUndeployed = false;
+                        break;
+                    }
+                }
+                if (!allUndeployed)
+                    break;
+            }
+
+            if (!allUndeployed) {
+                // Rollback the index update if verification fails
+                rollbackModelState(modelIds, listener);
+                return;
+            }
+
+            listener.onResponse(new MLUndeployModelsResponse(verifyResponse));
+        }, e -> {
+            log.error("Failed to verify model undeployment", e);
+            // Rollback on verification failure
+            rollbackModelState(modelIds, listener);
+        }));
+    }
+
+    private void rollbackModelState(String[] modelIds, ActionListener<MLUndeployModelsResponse> listener) {
+        BulkRequest rollbackRequest = new BulkRequest();
+        for (String modelId : modelIds) {
+            UpdateRequest updateRequest = new UpdateRequest();
+            ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+            builder.put(MLModel.MODEL_STATE_FIELD, MLModelState.DEPLOYED.name());
+            updateRequest.index(ML_MODEL_INDEX).id(modelId).doc(builder.build());
+            rollbackRequest.add(updateRequest);
         }
 
+        rollbackRequest.setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE);
+        client.bulk(rollbackRequest, ActionListener.wrap(response -> {
+            if (response.hasFailures()) {
+                log.error("Failed to rollback model state: {}", response.buildFailureMessage());
+            }
+            listener
+                .onFailure(
+                    new OpenSearchStatusException(
+                        "Failed to verify model undeployment - state may be inconsistent",
+                        RestStatus.INTERNAL_SERVER_ERROR
+                    )
+                );
+        }, e -> {
+            log.error("Failed to rollback model state", e);
+            listener
+                .onFailure(
+                    new OpenSearchStatusException(
+                        "Failed to verify model undeployment - state may be inconsistent",
+                        RestStatus.INTERNAL_SERVER_ERROR
+                    )
+                );
+        }));
     }
 
     private void validateAccess(String modelId, String tenantId, ActionListener<Boolean> listener) {

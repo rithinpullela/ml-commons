@@ -86,7 +86,6 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
     private Map<String, Memory.Factory> memoryFactoryMap;
     private volatile Boolean isMultiTenancyEnabled;
 
-
     public MLAgentExecutor(
         Client client,
         SdkClient sdkClient,

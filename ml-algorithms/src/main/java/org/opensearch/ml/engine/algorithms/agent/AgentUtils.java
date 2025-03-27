@@ -42,16 +42,11 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-import com.google.gson.reflect.TypeToken;
-import com.jayway.jsonpath.DocumentContext;
-import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.PathNotFoundException;
 import org.apache.commons.text.StringSubstitutor;
-import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.common.Strings;
-import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.ml.common.agent.MLAgent;
 import org.opensearch.ml.common.agent.MLToolSpec;
 import org.opensearch.ml.common.connector.Connector;
@@ -65,8 +60,13 @@ import org.opensearch.ml.common.transport.connector.MLConnectorGetResponse;
 import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.engine.MLEngineClassLoader;
 import org.opensearch.ml.engine.algorithms.remote.McpConnectorExecutor;
-import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.client.Client;
+
+import com.google.gson.reflect.TypeToken;
+import com.jayway.jsonpath.DocumentContext;
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.PathNotFoundException;
+
 import lombok.extern.log4j.Log4j2;
 
 @Log4j2
@@ -592,7 +592,7 @@ public class AgentUtils {
         return toolSpec.getName() != null ? toolSpec.getName() : toolSpec.getType();
     }
 
-    public static List<MLToolSpec> getMlToolSpecs(MLAgent mlAgent, Map<String, String> params, Client client, ClusterService clusterService, NamedXContentRegistry xContentRegistry) {
+    public static List<MLToolSpec> getMlToolSpecs(MLAgent mlAgent, Map<String, String> params, Client client) {
         String selectedToolsStr = params.get(SELECTED_TOOLS);
         List<MLToolSpec> toolSpecs = mlAgent.getTools();
         if (!Strings.isEmpty(selectedToolsStr)) {
@@ -609,27 +609,61 @@ public class AgentUtils {
             }
             toolSpecs = selectedToolSpecs;
         }
-        List<MLToolSpec> mcpToolSpecs = getMcpToolSpec(mlAgent, client, clusterService, xContentRegistry);
+        List<MLToolSpec> mcpToolSpecs = getMcpToolSpec(mlAgent, client);
         toolSpecs.addAll(mcpToolSpecs);
         return toolSpecs;
     }
 
-    private static List<MLToolSpec> getMcpToolSpec(MLAgent mlAgent, Client client, ClusterService clusterService, NamedXContentRegistry xContentRegistry) {
-        String connectorId = mlAgent.getParameters().get("mcp_connector_id");
-        if (connectorId == null) {
-            return null;
+    private static List<MLToolSpec> getMcpToolSpec(MLAgent mlAgent, Client client) {
+
+        List<MLToolSpec> mcpToolSpec = new ArrayList<>();
+        String tenantId = mlAgent.getTenantId();
+
+        String mcpConnectorConfigJSON = mlAgent.getParameters().get("mcp_connectors");
+
+        Type listType = new TypeToken<List<Map<String, Object>>>() {
+        }.getType();
+        List<Map<String, Object>> mcpConnectorConfigs = gson.fromJson(mcpConnectorConfigJSON, listType);
+
+        for (Map<String, Object> mcpConnectorConfig : mcpConnectorConfigs) {
+            String connectorId = (String) mcpConnectorConfig.get("mcp_connector_id");
+            List<String> toolFilters = (List<String>) mcpConnectorConfig.get("tool_filters");
+            List<MLToolSpec> mcpTools = getMCPToolsFromConnector(connectorId, tenantId, client);
+
+            if (toolFilters == null || toolFilters.isEmpty()) {
+                mcpToolSpec.addAll(mcpTools);
+            } else {
+                List<Pattern> compiledPatterns = toolFilters.stream().map(Pattern::compile).collect(Collectors.toList());
+                for (MLToolSpec toolSpec : mcpTools) {
+                    for (Pattern pattern : compiledPatterns) {
+                        if (pattern.matcher(toolSpec.getName()).matches()) {
+                            mcpToolSpec.add(toolSpec);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
-        String tenantId = mlAgent.getTenantId();
+        return mcpToolSpec;
+    }
+
+    private static List<MLToolSpec> getMCPToolsFromConnector(String connectorId, String tenantId, Client client) {
         // Create a request to get the connector
         MLConnectorGetRequest request = new MLConnectorGetRequest(connectorId, tenantId, true);
 
         // Use CompletableFuture to block until the connector is fetched
         CompletableFuture<MLConnectorGetResponse> connectorFuture = new CompletableFuture<>();
-        client.execute(MLConnectorGetAction.INSTANCE, request, ActionListener.wrap(
-                r -> connectorFuture.complete(MLConnectorGetResponse.fromActionResponse(r)),
-                e -> connectorFuture.completeExceptionally(e)
-        ));
+        client
+            .execute(
+                MLConnectorGetAction.INSTANCE,
+                request,
+                ActionListener
+                    .wrap(
+                        r -> connectorFuture.complete(MLConnectorGetResponse.fromActionResponse(r)),
+                        e -> connectorFuture.completeExceptionally(e)
+                    )
+            );
 
         MLConnectorGetResponse response = null;
         try {
@@ -645,13 +679,7 @@ public class AgentUtils {
             throw new IllegalArgumentException("Connector is not of type McpConnector");
         }
 
-        McpConnectorExecutor connectorExecutor = MLEngineClassLoader.initInstance(
-                connector.getProtocol(), connector, Connector.class
-        );
-        connectorExecutor.setClusterService(clusterService);
-        connectorExecutor.setClient(client);
-        connectorExecutor.setXContentRegistry(xContentRegistry);
-
+        McpConnectorExecutor connectorExecutor = MLEngineClassLoader.initInstance(connector.getProtocol(), connector, Connector.class);
 
         List<MLToolSpec> mcpToolSpecs = connectorExecutor.getMcpToolSpecs();
 

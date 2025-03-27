@@ -1,11 +1,21 @@
 package org.opensearch.ml.common.connector;
 
-import lombok.Builder;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.extern.log4j.Log4j2;
+import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.opensearch.ml.common.CommonValue.TENANT_ID_FIELD;
+import static org.opensearch.ml.common.CommonValue.VERSION_2_19_0;
+import static org.opensearch.ml.common.CommonValue.VERSION_2_19_1;
+import static org.opensearch.ml.common.connector.ConnectorProtocols.MCP_SSE;
+import static org.opensearch.ml.common.connector.ConnectorProtocols.validateProtocol;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.BiFunction;
+
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.Version;
 import org.opensearch.common.io.stream.BytesStreamOutput;
@@ -18,40 +28,24 @@ import org.opensearch.ml.common.AccessMode;
 import org.opensearch.ml.common.output.model.ModelTensor;
 import org.opensearch.ml.common.transport.connector.MLCreateConnectorInput;
 
-import java.io.IOException;
-import java.net.URL;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.function.BiFunction;
-
-import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
-import static org.opensearch.ml.common.CommonValue.TENANT_ID_FIELD;
-import static org.opensearch.ml.common.CommonValue.VERSION_2_19_0;
-import static org.opensearch.ml.common.CommonValue.VERSION_2_19_1;
-import static org.opensearch.ml.common.connector.ConnectorProtocols.MCP_SSE;
-import static org.opensearch.ml.common.connector.ConnectorProtocols.validateProtocol;
-import static org.opensearch.ml.common.utils.StringUtils.getParameterMap;
-
+import lombok.Builder;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 @NoArgsConstructor
 @EqualsAndHashCode
 @Getter
 @org.opensearch.ml.common.annotation.Connector(MCP_SSE)
-public class McpConnector implements Connector{
+public class McpConnector implements Connector {
 
-    public static final String ACCESS_KEY_FIELD = "access_key";
-    public static final String SECRET_KEY_FIELD = "secret_key";
-    public static final String SESSION_TOKEN_FIELD = "session_token";
     public static final String NAME_FIELD = "name";
     public static final String VERSION_FIELD = "version";
     public static final String DESCRIPTION_FIELD = "description";
     public static final String PROTOCOL_FIELD = "protocol";
-    public static final String ACTIONS_FIELD = "actions";
     public static final String CREDENTIAL_FIELD = "credential";
     public static final String PARAMETERS_FIELD = "parameters";
     public static final String CREATED_TIME_FIELD = "created_time";
@@ -93,20 +87,18 @@ public class McpConnector implements Connector{
 
     @Builder
     public McpConnector(
-            String name,
-            String description,
-            String version,
-            String protocol,
-            Map<String, String> parameters,
-            Map<String, String> credential,
-            List<ConnectorAction> actions,
-            List<String> backendRoles,
-            AccessMode accessMode,
-            User owner,
-            ConnectorClientConfig connectorClientConfig,
-            String tenantId,
-            String url,
-            Map<String, String> headers
+        String name,
+        String description,
+        String version,
+        String protocol,
+        Map<String, String> credential,
+        List<String> backendRoles,
+        AccessMode accessMode,
+        User owner,
+        ConnectorClientConfig connectorClientConfig,
+        String tenantId,
+        String url,
+        Map<String, String> headers
     ) {
         validateProtocol(protocol);
         this.name = name;
@@ -119,7 +111,7 @@ public class McpConnector implements Connector{
         this.owner = owner;
         this.connectorClientConfig = connectorClientConfig;
         this.tenantId = tenantId;
-        this.url =  url;
+        this.url = url;
         this.headers = headers;
     }
 
@@ -257,7 +249,7 @@ public class McpConnector implements Connector{
         }
         this.tenantId = streamInputVersion.onOrAfter(VERSION_2_19_0) ? input.readOptionalString() : null;
         this.url = streamInputVersion.onOrAfter(VERSION_2_19_1) ? input.readString() : null;
-        if(streamInputVersion.onOrAfter(VERSION_2_19_1)){
+        if (streamInputVersion.onOrAfter(VERSION_2_19_1)) {
             if (input.readBoolean()) {
                 this.headers = input.readMap(s -> s.readString(), s -> s.readString());
             }
@@ -266,7 +258,9 @@ public class McpConnector implements Connector{
 
     @Override
     public void removeCredential() {
-
+        this.credential = null;
+        this.decryptedCredential = null;
+        this.decryptedHeaders = null;
     }
 
     @Override
@@ -333,9 +327,6 @@ public class McpConnector implements Connector{
         if (updateContent.getProtocol() != null) {
             this.protocol = updateContent.getProtocol();
         }
-        if (updateContent.getParameters() != null && !updateContent.getParameters().isEmpty()) {
-            getParameters().putAll(updateContent.getParameters());
-        }
         if (updateContent.getCredential() != null && !updateContent.getCredential().isEmpty()) {
             this.credential = updateContent.getCredential();
             encrypt(function, this.tenantId);
@@ -359,9 +350,8 @@ public class McpConnector implements Connector{
 
     @Override
     public <T> void parseResponse(T orElse, List<ModelTensor> modelTensors, boolean b) throws IOException {
-
+        throw new UnsupportedOperationException("Not implemented.");
     }
-
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
@@ -402,10 +392,10 @@ public class McpConnector implements Connector{
         if (tenantId != null) {
             builder.field(TENANT_ID_FIELD, tenantId);
         }
-        if(url != null) {
+        if (url != null) {
             builder.field(URL_FIELD, url);
         }
-        if(headers != null) {
+        if (headers != null) {
             builder.field(HEADERS_FIELD, headers);
         }
         builder.endObject();
@@ -414,36 +404,36 @@ public class McpConnector implements Connector{
 
     @Override
     public Map<String, String> getParameters() {
-        return null;
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public List<ConnectorAction> getActions() {
-        return new ArrayList<>();
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public void addAction(ConnectorAction action) {
-
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public String getActionEndpoint(String action, Map<String, String> parameters) {
-        return "";
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public String getActionHttpMethod(String action) {
-        return "";
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public <T> T createPayload(String action, Map<String, String> parameters) {
-        return null;
+        throw new UnsupportedOperationException("Not implemented.");
     }
 
     @Override
     public Optional<ConnectorAction> findAction(String action) {
-        return Optional.empty();
+        throw new UnsupportedOperationException("Not implemented.");
     }
 }
