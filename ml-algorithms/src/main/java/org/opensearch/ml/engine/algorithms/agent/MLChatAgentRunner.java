@@ -75,12 +75,14 @@ import org.opensearch.ml.common.transport.MLTaskResponse;
 import org.opensearch.ml.common.transport.prediction.MLPredictionTaskAction;
 import org.opensearch.ml.common.transport.prediction.MLPredictionTaskRequest;
 import org.opensearch.ml.common.utils.StringUtils;
+import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.memory.ConversationIndexMemory;
 import org.opensearch.ml.engine.memory.ConversationIndexMessage;
 import org.opensearch.ml.engine.tools.MLModelTool;
 import org.opensearch.ml.engine.tools.McpSseTool;
 import org.opensearch.ml.repackage.com.google.common.collect.ImmutableMap;
 import org.opensearch.ml.repackage.com.google.common.collect.Lists;
+import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.client.Client;
 
 import lombok.Data;
@@ -128,6 +130,8 @@ public class MLChatAgentRunner implements MLAgentRunner {
     private NamedXContentRegistry xContentRegistry;
     private Map<String, Tool.Factory> toolFactories;
     private Map<String, Memory.Factory> memoryFactoryMap;
+    private SdkClient sdkClient;
+    private Encryptor encryptor;
 
     public MLChatAgentRunner(
         Client client,
@@ -135,7 +139,9 @@ public class MLChatAgentRunner implements MLAgentRunner {
         ClusterService clusterService,
         NamedXContentRegistry xContentRegistry,
         Map<String, Tool.Factory> toolFactories,
-        Map<String, Memory.Factory> memoryFactoryMap
+        Map<String, Memory.Factory> memoryFactoryMap,
+        SdkClient sdkClient,
+        Encryptor encryptor
     ) {
         this.client = client;
         this.settings = settings;
@@ -143,6 +149,8 @@ public class MLChatAgentRunner implements MLAgentRunner {
         this.xContentRegistry = xContentRegistry;
         this.toolFactories = toolFactories;
         this.memoryFactoryMap = memoryFactoryMap;
+        this.sdkClient = sdkClient;
+        this.encryptor = encryptor;
     }
 
     @Override
@@ -346,7 +354,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
     }
 
     private void runAgent(MLAgent mlAgent, Map<String, String> params, ActionListener<Object> listener, Memory memory, String sessionId) {
-        List<MLToolSpec> toolSpecs = getMlToolSpecs(mlAgent, params, client);
+        List<MLToolSpec> toolSpecs = getMlToolSpecs(mlAgent, params, client, sdkClient, encryptor);
         Map<String, Tool> tools = new HashMap<>();
         Map<String, MLToolSpec> toolSpecMap = new HashMap<>();
         createTools(toolFactories, params, toolSpecs, tools, toolSpecMap, mlAgent);

@@ -7,6 +7,7 @@ package org.opensearch.ml.engine.algorithms.remote;
 
 import static org.opensearch.ml.common.connector.ConnectorProtocols.MCP_SSE;
 
+import java.net.http.HttpRequest;
 import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
 import java.time.Duration;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 import org.apache.logging.log4j.Logger;
 import org.opensearch.common.collect.Tuple;
@@ -80,14 +82,21 @@ public class McpConnectorExecutor extends AbstractConnectorExecutor {
                     return thread;
                 });
 
-                Map<String, String> credentials = connector.getDecryptedCredential();
-                Duration connectionTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getConnectionTimeout());
-                Duration readTimeout = Duration.ofSeconds(super.getConnectorClientConfig().getReadTimeout());
+                Duration connectionTimeout = Duration.ofSeconds(10);
+                Duration readTimeout = Duration.ofSeconds(10);
+
+                Consumer<HttpRequest.Builder> headerConfig = builder -> {
+                    builder.header("Content-Type", "application/json");
+
+                    for (Map.Entry<String, String> entry : connector.getDecryptedHeaders().entrySet()) {
+                        builder.header(entry.getKey(), entry.getValue());
+                    }
+                };
 
                 // Create transport
                 McpClientTransport transport = HttpClientSseClientTransport.builder(mcpServerUrl).customizeClient(clientBuilder -> {
                     clientBuilder.executor(executor).connectTimeout(connectionTimeout);
-                }).customizeRequest(requestBuilder -> { requestBuilder.header("Content-Type", "application/json"); }).build();
+                }).customizeRequest(headerConfig).build();
 
                 // Create and initialize client
                 McpSyncClient client = McpClient

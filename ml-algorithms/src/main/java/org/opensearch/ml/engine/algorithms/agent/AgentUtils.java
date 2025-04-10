@@ -5,6 +5,8 @@
 
 package org.opensearch.ml.engine.algorithms.agent;
 
+import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.opensearch.ml.common.CommonValue.ML_CONNECTOR_INDEX;
 import static org.opensearch.ml.common.CommonValue.TENANT_ID_FIELD;
 import static org.opensearch.ml.common.utils.StringUtils.getParameterMap;
 import static org.opensearch.ml.common.utils.StringUtils.gson;
@@ -25,6 +27,7 @@ import static org.opensearch.ml.engine.algorithms.agent.MLChatAgentRunner.TOOL_N
 import static org.opensearch.ml.engine.algorithms.agent.MLPlanExecuteAndReflectAgentRunner.RESPONSE_FIELD;
 import static org.opensearch.ml.engine.memory.ConversationIndexMemory.LAST_N_INTERACTIONS;
 
+import java.io.IOException;
 import java.lang.reflect.Type;
 import java.security.AccessController;
 import java.security.PrivilegedActionException;
@@ -44,8 +47,20 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.commons.text.StringSubstitutor;
+import org.opensearch.ExceptionsHelper;
+import org.opensearch.OpenSearchStatusException;
+import org.opensearch.action.get.GetResponse;
+import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.common.xcontent.LoggingDeprecationHandler;
+import org.opensearch.common.xcontent.XContentHelper;
+import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.ml.common.agent.MLAgent;
 import org.opensearch.ml.common.agent.MLToolSpec;
 import org.opensearch.ml.common.connector.Connector;
@@ -53,12 +68,13 @@ import org.opensearch.ml.common.connector.McpConnector;
 import org.opensearch.ml.common.output.model.ModelTensor;
 import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.spi.tools.Tool;
-import org.opensearch.ml.common.transport.connector.MLConnectorGetAction;
-import org.opensearch.ml.common.transport.connector.MLConnectorGetRequest;
-import org.opensearch.ml.common.transport.connector.MLConnectorGetResponse;
 import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.engine.MLEngineClassLoader;
 import org.opensearch.ml.engine.algorithms.remote.McpConnectorExecutor;
+import org.opensearch.ml.engine.encryptor.Encryptor;
+import org.opensearch.remote.metadata.client.GetDataObjectRequest;
+import org.opensearch.remote.metadata.client.SdkClient;
+import org.opensearch.remote.metadata.common.SdkClientUtils;
 import org.opensearch.transport.client.Client;
 
 import com.google.gson.reflect.TypeToken;
@@ -601,7 +617,13 @@ public class AgentUtils {
         return toolSpec.getName() != null ? toolSpec.getName() : toolSpec.getType();
     }
 
-    public static List<MLToolSpec> getMlToolSpecs(MLAgent mlAgent, Map<String, String> params, Client client) {
+    public static List<MLToolSpec> getMlToolSpecs(
+        MLAgent mlAgent,
+        Map<String, String> params,
+        Client client,
+        SdkClient sdkClient,
+        Encryptor encryptor
+    ) {
         String selectedToolsStr = params.get(SELECTED_TOOLS);
         List<MLToolSpec> toolSpecs = mlAgent.getTools();
         if (!Strings.isEmpty(selectedToolsStr)) {
@@ -618,7 +640,7 @@ public class AgentUtils {
             }
             toolSpecs = selectedToolSpecs;
         }
-        List<MLToolSpec> mcpToolSpecs = getMcpToolSpec(mlAgent, client);
+        List<MLToolSpec> mcpToolSpecs = getMcpToolSpec(mlAgent, client, sdkClient, encryptor);
         if (toolSpecs == null) {
             toolSpecs = new ArrayList<>();
         }
@@ -626,7 +648,7 @@ public class AgentUtils {
         return toolSpecs;
     }
 
-    private static List<MLToolSpec> getMcpToolSpec(MLAgent mlAgent, Client client) {
+    private static List<MLToolSpec> getMcpToolSpec(MLAgent mlAgent, Client client, SdkClient sdkClient, Encryptor encryptor) {
 
         List<MLToolSpec> mcpToolSpec = new ArrayList<>();
         String tenantId = mlAgent.getTenantId();
@@ -648,7 +670,7 @@ public class AgentUtils {
         for (Map<String, Object> mcpConnectorConfig : mcpConnectorConfigs) {
             String connectorId = (String) mcpConnectorConfig.get(MCP_CONNECTOR_ID_FIELD);
             List<String> toolFilters = (List<String>) mcpConnectorConfig.get(TOOL_FILTERS_FIELD);
-            List<MLToolSpec> mcpTools = getMCPToolsFromConnector(connectorId, tenantId, client);
+            List<MLToolSpec> mcpTools = getMCPToolsFromConnector(connectorId, tenantId, sdkClient, client, encryptor);
 
             if (toolFilters == null || toolFilters.isEmpty()) {
                 mcpToolSpec.addAll(mcpTools);
@@ -668,40 +690,105 @@ public class AgentUtils {
         return mcpToolSpec;
     }
 
-    private static List<MLToolSpec> getMCPToolsFromConnector(String connectorId, String tenantId, Client client) {
+    private static List<MLToolSpec> getMCPToolsFromConnector(
+        String connectorId,
+        String tenantId,
+        SdkClient sdkClient,
+        Client client,
+        Encryptor encryptor
+    ) {
         // Create a request to get the connector
-        MLConnectorGetRequest request = new MLConnectorGetRequest(connectorId, tenantId, true);
+        // MLConnectorGetRequest request = new MLConnectorGetRequest(connectorId, tenantId, true);
 
         // Use CompletableFuture to block until the connector is fetched
-        CompletableFuture<MLConnectorGetResponse> connectorFuture = new CompletableFuture<>();
-        client
-            .execute(
-                MLConnectorGetAction.INSTANCE,
-                request,
-                ActionListener
-                    .wrap(
-                        r -> connectorFuture.complete(MLConnectorGetResponse.fromActionResponse(r)),
-                        e -> connectorFuture.completeExceptionally(e)
-                    )
-            );
+        CompletableFuture<Connector> connectorFuture = new CompletableFuture<>();
+        getConnector(
+            connectorId,
+            tenantId,
+            sdkClient,
+            client,
+            ActionListener
+                .wrap(connector -> connectorFuture.complete(connector), exception -> connectorFuture.completeExceptionally(exception))
+        );
 
-        MLConnectorGetResponse response = null;
+        Connector connector = null;
         try {
-            response = connectorFuture.get();
+            connector = connectorFuture.get();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-        Connector connector = response.getMlConnector();
 
         if (!(connector instanceof McpConnector)) {
             throw new IllegalArgumentException("Connector is not of type McpConnector");
         }
+        connector.decrypt("any", (credential, tid) -> encryptor.decrypt(credential, tenantId), tenantId);
 
         McpConnectorExecutor connectorExecutor = MLEngineClassLoader.initInstance(connector.getProtocol(), connector, Connector.class);
 
         List<MLToolSpec> mcpToolSpecs = connectorExecutor.getMcpToolSpecs();
 
         return mcpToolSpecs;
+    }
+
+    public static void getConnector(
+        String connectorId,
+        String tenantId,
+        SdkClient sdkClient,
+        Client client,
+        ActionListener<Connector> listener
+    ) {
+        GetDataObjectRequest getDataObjectRequest = GetDataObjectRequest
+            .builder()
+            .index(ML_CONNECTOR_INDEX)
+            .id(connectorId)
+            .tenantId(tenantId)
+            .build();
+
+        try (ThreadContext.StoredContext ctx = client.threadPool().getThreadContext().stashContext()) {
+            sdkClient.getDataObjectAsync(getDataObjectRequest).whenComplete((r, throwable) -> {
+                log.debug("Completed Get Connector Request, id:{}", connectorId);
+                ctx.restore();
+                if (throwable != null) {
+                    Exception cause = SdkClientUtils.unwrapAndConvertToException(throwable);
+                    if (ExceptionsHelper.unwrap(cause, IndexNotFoundException.class) != null) {
+                        log.error("Failed to get connector index", cause);
+                        listener.onFailure(new OpenSearchStatusException("Failed to find connector", RestStatus.NOT_FOUND));
+                    } else {
+                        log.error("Failed to get ML connector {}", connectorId, cause);
+                        listener.onFailure(cause);
+                    }
+                } else {
+                    try {
+                        GetResponse gr = r.parser() == null ? null : GetResponse.fromXContent(r.parser());
+                        if (gr != null && gr.isExists()) {
+                            try (
+                                XContentParser parser = createXContentParserFromRegistry(
+                                    NamedXContentRegistry.EMPTY,
+                                    gr.getSourceAsBytesRef()
+                                )
+                            ) {
+                                ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
+                                Connector connector = Connector.createConnector(parser);
+                                listener.onResponse(connector);
+                            } catch (Exception e) {
+                                log.error("Failed to parse connector:{}", connectorId);
+                                listener.onFailure(e);
+                            }
+                        } else {
+                            listener
+                                .onFailure(new OpenSearchStatusException("Failed to find connector:" + connectorId, RestStatus.NOT_FOUND));
+                        }
+                    } catch (Exception e) {
+                        listener.onFailure(e);
+                    }
+                }
+            });
+        }
+    }
+
+    public static XContentParser createXContentParserFromRegistry(NamedXContentRegistry xContentRegistry, BytesReference bytesReference)
+        throws IOException {
+        return XContentHelper.createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, bytesReference, XContentType.JSON);
     }
 
     public static void createTools(
