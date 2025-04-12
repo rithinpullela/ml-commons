@@ -57,7 +57,9 @@ import org.opensearch.ml.common.transport.execute.MLExecuteTaskRequest;
 import org.opensearch.ml.common.transport.prediction.MLPredictionTaskAction;
 import org.opensearch.ml.common.transport.prediction.MLPredictionTaskRequest;
 import org.opensearch.ml.common.utils.StringUtils;
+import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.memory.ConversationIndexMemory;
+import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.client.Client;
 
 import com.jayway.jsonpath.JsonPath;
@@ -74,6 +76,8 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
     private final NamedXContentRegistry xContentRegistry;
     private final Map<String, Tool.Factory> toolFactories;
     private final Map<String, Memory.Factory> memoryFactoryMap;
+    private SdkClient sdkClient;
+    private Encryptor encryptor;
 
     // defaults
     private static final String DEFAULT_DEEP_RESEARCH_SYSTEM_PROMPT = "Always respond in JSON format.";
@@ -111,7 +115,9 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         ClusterService clusterService,
         NamedXContentRegistry registry,
         Map<String, Tool.Factory> toolFactories,
-        Map<String, Memory.Factory> memoryFactoryMap
+        Map<String, Memory.Factory> memoryFactoryMap,
+        SdkClient sdkClient,
+        Encryptor encryptor
     ) {
         this.client = client;
         this.settings = settings;
@@ -119,6 +125,8 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         this.xContentRegistry = registry;
         this.toolFactories = toolFactories;
         this.memoryFactoryMap = memoryFactoryMap;
+        this.sdkClient = sdkClient;
+        this.encryptor = encryptor;
     }
 
     private void setupPromptParameters(Map<String, String> params) {
