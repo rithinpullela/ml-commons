@@ -6,6 +6,7 @@
 package org.opensearch.ml.engine.tools;
 
 import static org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest.DEFAULT_CLUSTER_MANAGER_NODE_TIMEOUT;
+import static org.opensearch.ml.common.CommonValue.TOOL_INPUT_SCHEMA_FIELD;
 import static org.opensearch.ml.common.utils.StringUtils.gson;
 
 import java.util.Collection;
@@ -113,7 +114,7 @@ public class ListIndexTool implements Tool {
         this.attributes = new HashMap<>();
         attributes
             .put(
-                "input_schema",
+                TOOL_INPUT_SCHEMA_FIELD,
                 "{\"type\":\"object\",\"properties\":{\"indices\":{\"type\":\"string\",\"description\":\"OpenSearch index name list, separated by comma. for example: index1, index2\"}},\"additionalProperties\":false}"
             );
         attributes.put("strict", false);

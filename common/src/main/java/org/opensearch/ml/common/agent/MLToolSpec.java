@@ -96,8 +96,6 @@ public class MLToolSpec implements ToXContentObject {
             if (input.readBoolean()) {
                 attributes = input.readMap(StreamInput::readString, StreamInput::readOptionalString);
             }
-        }
-        if (streamInputVersion.onOrAfter(VERSION_3_0_0)) {
             if (input.readBoolean()) {
                 runtimeResources = input.readMap(StreamInput::readString, StreamInput::readGenericValue);
             }
@@ -134,8 +132,6 @@ public class MLToolSpec implements ToXContentObject {
             } else {
                 out.writeBoolean(false);
             }
-        }
-        if (streamOutputVersion.onOrAfter(VERSION_3_0_0)) {
             if (runtimeResources != null) {
                 out.writeBoolean(true);
                 out.writeMap(runtimeResources, StreamOutput::writeString, StreamOutput::writeGenericValue);

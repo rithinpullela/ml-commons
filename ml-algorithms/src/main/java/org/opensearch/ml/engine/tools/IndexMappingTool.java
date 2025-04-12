@@ -6,6 +6,7 @@
 package org.opensearch.ml.engine.tools;
 
 import static org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest.DEFAULT_CLUSTER_MANAGER_NODE_TIMEOUT;
+import static org.opensearch.ml.common.CommonValue.TOOL_INPUT_SCHEMA_FIELD;
 import static org.opensearch.ml.common.utils.StringUtils.gson;
 
 import java.util.Collections;
@@ -69,7 +70,7 @@ public class IndexMappingTool implements Tool {
         this.attributes = new HashMap<>();
         attributes
             .put(
-                "input_schema",
+                TOOL_INPUT_SCHEMA_FIELD,
                 "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"string\",\"description\":\"OpenSearch index name\"}},\"required\":[\"index\"],\"additionalProperties\":false}"
             );
         attributes.put("strict", true);
