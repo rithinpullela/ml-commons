@@ -63,6 +63,9 @@ public class MemoryContainerConstants {
     public static final int KNN_EF_CONSTRUCTION = 100;
     public static final int KNN_M = 16;
 
+    // memory fields
+    public static final String PARAMETER_MEMORY_ID = "memory_id";
+
     // REST API paths
     public static final String BASE_MEMORY_CONTAINERS_PATH = "/_plugins/_ml/memory_containers";
     public static final String CREATE_MEMORY_CONTAINER_PATH = BASE_MEMORY_CONTAINERS_PATH + "/_create";
