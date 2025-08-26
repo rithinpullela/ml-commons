@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
+import lombok.Getter;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
@@ -56,7 +57,9 @@ public class McpToolsHelper {
     private static final int SYNC_MCP_TOOLS_JOB_INTERVAL = 10;
 
     private final Client client;
+    @Getter
     private final ThreadPool threadPool;
+    @Getter
     private final ToolFactoryWrapper toolFactoryWrapper;
 
     public McpToolsHelper(Client client, ThreadPool threadPool, ToolFactoryWrapper toolFactoryWrapper) {

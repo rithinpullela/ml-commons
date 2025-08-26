@@ -92,17 +92,7 @@ import org.opensearch.ml.action.deploy.TransportDeployModelOnNodeAction;
 import org.opensearch.ml.action.execute.TransportExecuteTaskAction;
 import org.opensearch.ml.action.forward.TransportForwardAction;
 import org.opensearch.ml.action.handler.MLSearchHandler;
-import org.opensearch.ml.action.mcpserver.McpAsyncServerHolder;
-import org.opensearch.ml.action.mcpserver.McpToolsHelper;
-import org.opensearch.ml.action.mcpserver.TransportMcpMessageAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpMessageDispatchedAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsListAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsRegisterAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsRegisterOnNodesAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsRemoveAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsRemoveOnNodesAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsUpdateAction;
-import org.opensearch.ml.action.mcpserver.TransportMcpToolsUpdateOnNodesAction;
+import org.opensearch.ml.action.mcpserver.*;
 import org.opensearch.ml.action.memorycontainer.TransportCreateMemoryContainerAction;
 import org.opensearch.ml.action.memorycontainer.TransportDeleteMemoryContainerAction;
 import org.opensearch.ml.action.memorycontainer.TransportGetMemoryContainerAction;
@@ -357,12 +347,7 @@ import org.opensearch.ml.rest.RestMemorySearchConversationsAction;
 import org.opensearch.ml.rest.RestMemorySearchInteractionsAction;
 import org.opensearch.ml.rest.RestMemoryUpdateConversationAction;
 import org.opensearch.ml.rest.RestMemoryUpdateInteractionAction;
-import org.opensearch.ml.rest.mcpserver.RestMLMcpToolsListAction;
-import org.opensearch.ml.rest.mcpserver.RestMLMcpToolsRegisterAction;
-import org.opensearch.ml.rest.mcpserver.RestMLMcpToolsRemoveAction;
-import org.opensearch.ml.rest.mcpserver.RestMLMcpToolsUpdateAction;
-import org.opensearch.ml.rest.mcpserver.RestMcpConnectionMessageStreamingAction;
-import org.opensearch.ml.rest.mcpserver.ToolFactoryWrapper;
+import org.opensearch.ml.rest.mcpserver.*;
 import org.opensearch.ml.searchext.MLInferenceRequestParametersExtBuilder;
 import org.opensearch.ml.stats.MLClusterLevelStat;
 import org.opensearch.ml.stats.MLNodeLevelStat;
@@ -852,6 +837,7 @@ public class MachineLearningPlugin extends Plugin
 
         mcpToolsHelper = new McpToolsHelper(client, threadPool, toolFactoryWrapper);
         McpAsyncServerHolder.init(mlIndicesHandler, mcpToolsHelper);
+        McpStatelessServerHolder.init(mlIndicesHandler, mcpToolsHelper);
 
         return ImmutableList
             .of(
@@ -976,6 +962,7 @@ public class MachineLearningPlugin extends Plugin
             clusterService,
             mlFeatureEnabledSetting
         );
+        RestMCPStatelessStreamingAction restMcpStatelessStreamingAction = new RestMCPStatelessStreamingAction(mlFeatureEnabledSetting);
         RestMLMcpToolsRegisterAction restMLRegisterMcpToolsAction = new RestMLMcpToolsRegisterAction(
             toolFactories,
             clusterService,
@@ -1048,6 +1035,7 @@ public class MachineLearningPlugin extends Plugin
                 restMLGetConfigAction,
                 restMLCancelBatchJobAction,
                 restMcpConnectionMessageStreamingAction,
+                restMcpStatelessStreamingAction,
                 restMLRegisterMcpToolsAction,
                 restMLRemoveMcpToolsAction,
                 restMLListMcpToolsAction,
