@@ -837,7 +837,7 @@ public class MachineLearningPlugin extends Plugin
 
         mcpToolsHelper = new McpToolsHelper(client, threadPool, toolFactoryWrapper);
         McpAsyncServerHolder.init(mlIndicesHandler, mcpToolsHelper);
-        McpStatelessServerHolder.init(mlIndicesHandler, mcpToolsHelper);
+        McpStatelessServerHolder.init(mlIndicesHandler, mcpToolsHelper, client);
 
         return ImmutableList
             .of(

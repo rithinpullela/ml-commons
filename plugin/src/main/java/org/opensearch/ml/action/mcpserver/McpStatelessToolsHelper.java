@@ -5,18 +5,42 @@
 
 package org.opensearch.ml.action.mcpserver;
 
+import static org.opensearch.common.xcontent.json.JsonXContent.jsonXContent;
+import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.opensearch.ml.plugin.MachineLearningPlugin.GENERAL_THREAD_POOL;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.opensearch.OpenSearchException;
+import org.opensearch.action.search.SearchRequest;
+import org.opensearch.action.search.SearchResponse;
+import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.unit.TimeValue;
+import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.common.xcontent.LoggingDeprecationHandler;
+import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.query.MatchAllQueryBuilder;
+import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.ml.common.CommonValue;
+import org.opensearch.ml.common.MLIndex;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.common.transport.mcpserver.requests.McpToolBaseInput;
+import org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput;
 import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.rest.mcpserver.ToolFactoryWrapper;
+import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.threadpool.ThreadPool;
-import org.opensearch.common.unit.TimeValue;
-import org.opensearch.core.action.ActionListener;
+import org.opensearch.transport.client.Client;
 
 import com.google.common.collect.ImmutableMap;
 
@@ -27,24 +51,24 @@ import reactor.core.publisher.Mono;
 
 /**
  * Helper for creating stateless MCP tool specifications.
- * This replicates McpToolsHelper behavior but for stateless servers.
+ * This is completely independent of McpToolsHelper with duplicated code.
  */
 @Log4j2
 public class McpStatelessToolsHelper {
+    public static final int MAX_TOOL_NUMBER = 1000;
+    private static final int SYNC_MCP_TOOLS_JOB_INTERVAL = 10;
 
-    private final ToolFactoryWrapper toolFactoryWrapper;
+    private final Client client;
     private final ThreadPool threadPool;
-    private final McpToolsHelper mcpToolsHelper;
+    private final ToolFactoryWrapper toolFactoryWrapper;
 
     // Track tools in memory (similar to McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS)
     private final Map<String, Long> inMemoryTools = new ConcurrentHashMap<>();
 
-    private static final int SYNC_MCP_TOOLS_JOB_INTERVAL = 10;
-
-    public McpStatelessToolsHelper(ToolFactoryWrapper toolFactoryWrapper, ThreadPool threadPool, McpToolsHelper mcpToolsHelper) {
-        this.toolFactoryWrapper = toolFactoryWrapper;
+    public McpStatelessToolsHelper(Client client, ThreadPool threadPool, ToolFactoryWrapper toolFactoryWrapper) {
+        this.client = client;
         this.threadPool = threadPool;
-        this.mcpToolsHelper = mcpToolsHelper;
+        this.toolFactoryWrapper = toolFactoryWrapper;
     }
 
     /**
@@ -95,6 +119,13 @@ public class McpStatelessToolsHelper {
     }
 
     /**
+     * Get the thread pool for external use
+     */
+    public ThreadPool getThreadPool() {
+        return threadPool;
+    }
+
+    /**
      * Track tool in memory (similar to McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS)
      */
     public void trackTool(String toolName, long version) {
@@ -102,68 +133,114 @@ public class McpStatelessToolsHelper {
     }
 
     /**
-     * Check if tool exists in memory
+     * Get tracked tools in memory
      */
-    public boolean hasTool(String toolName) {
-        return inMemoryTools.containsKey(toolName);
+    public Map<String, Long> getInMemoryTools() {
+        return inMemoryTools;
     }
 
     /**
-     * Get tool version from memory
+     * Search all tools from the MCP tools index
+     * This duplicates the logic from McpToolsHelper.searchAllTools()
      */
-    public Long getToolVersion(String toolName) {
-        return inMemoryTools.get(toolName);
+    public void searchAllTools(ActionListener<List<McpToolRegisterInput>> listener) {
+        try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
+            ActionListener<List<McpToolRegisterInput>> restoreListener = ActionListener.runBefore(listener, context::restore);
+            ActionListener<SearchResponse> actionListener = ActionListener.wrap(r -> {
+                List<McpToolRegisterInput> mcpTools = new ArrayList<>();
+                Arrays.stream(Objects.requireNonNull(r.getHits().getHits())).forEach(x -> {
+                    try {
+                        McpToolRegisterInput mcpTool = parseMcpTool(x.getSourceAsString());
+                        mcpTools.add(mcpTool);
+                    } catch (IOException e) {
+                        listener.onFailure(e);
+                    }
+                });
+                restoreListener.onResponse(mcpTools);
+            }, e -> {
+                String errMsg = String.format(Locale.ROOT, "Failed to search mcp tools index with error: %s", e.getMessage());
+                log.error(errMsg, e);
+                restoreListener.onFailure(new OpenSearchException(errMsg));
+            });
+
+            client.search(buildSearchRequest(), actionListener);
+        } catch (Exception e) {
+            log.error("Failed to search mcp tools index", e);
+            listener.onFailure(e);
+        }
     }
 
     /**
-     * Start sync job for auto-reloading tools
+     * Start the sync job for auto-reloading MCP tools
+     * This duplicates the logic from McpToolsHelper.startSyncMcpToolsJob()
      */
     public void startSyncMcpToolsJob() {
         ActionListener<Boolean> listener = ActionListener
-                .wrap(r -> { log.debug("Auto reload mcp tools schedule job run successfully!"); }, e -> {
-                    log.error(e.getMessage(), e);
-                });
+            .wrap(r -> { log.debug("Auto reload mcp tools schedule job run successfully!"); }, e -> {
+                log.error(e.getMessage(), e);
+            });
         threadPool
-                .schedule(() -> autoLoadAllMcpTools(listener), TimeValue.timeValueSeconds(SYNC_MCP_TOOLS_JOB_INTERVAL),
-                        org.opensearch.ml.plugin.MachineLearningPlugin.GENERAL_THREAD_POOL);
+            .schedule(() -> autoLoadAllMcpTools(listener), TimeValue.timeValueSeconds(SYNC_MCP_TOOLS_JOB_INTERVAL), GENERAL_THREAD_POOL);
     }
 
     /**
-     * Auto-reload all MCP tools (similar to McpToolsHelper.autoLoadAllMcpTools)
+     * Auto-load all MCP tools from the index
+     * This duplicates the logic from McpToolsHelper.autoLoadAllMcpTools()
      */
     public void autoLoadAllMcpTools(ActionListener<Boolean> listener) {
-        try {
-            // Use the existing searchAllTools method from mcpToolsHelper
-            // This will reload tools from the system index and update our in-memory tracking
-            mcpToolsHelper.searchAllTools(new org.opensearch.core.action.ActionListener<List<org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput>>() {
-                @Override
-                public void onResponse(List<org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput> tools) {
-                    try {
-                        // Update our in-memory tracking
-                        tools.forEach(tool -> {
-                            String toolName = Optional.ofNullable(tool.getName()).orElse(tool.getType());
-                            // For now, just track with current timestamp
-                            // In a full implementation, you might want to track version numbers
-                            trackTool(toolName, System.currentTimeMillis());
-                        });
-                        
-                        log.debug("Successfully reloaded {} MCP tools for stateless server", tools.size());
-                        listener.onResponse(true);
-                    } catch (Exception e) {
-                        log.error("Failed to process reloaded tools", e);
-                        listener.onFailure(e);
-                    }
+        try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
+            ActionListener<Boolean> restoreListener = ActionListener.runBefore(listener, context::restore);
+            ActionListener<List<McpToolRegisterInput>> searchListener = ActionListener.wrap(tools -> {
+                try {
+                    tools.forEach(tool -> {
+                        String toolName = Optional.ofNullable(tool.getName()).orElse(tool.getType());
+                        trackTool(toolName, System.currentTimeMillis());
+                    });
+                    log.debug("Successfully reloaded {} MCP tools for stateless server", tools.size());
+                    restoreListener.onResponse(true);
+                } catch (Exception e) {
+                    log.error("Failed to process reloaded tools", e);
+                    restoreListener.onFailure(e);
                 }
-
-                @Override
-                public void onFailure(Exception e) {
-                    log.error("Failed to reload MCP tools for stateless server", e);
-                    listener.onFailure(e);
-                }
+            }, e -> {
+                log.error("Failed to reload MCP tools for stateless server", e);
+                restoreListener.onFailure(e);
             });
+            searchAllTools(searchListener);
         } catch (Exception e) {
             log.error("Failed to auto-reload MCP tools for stateless server", e);
             listener.onFailure(e);
+        }
+    }
+
+    /**
+     * Build search request for all tools
+     * This duplicates the logic from McpToolsHelper.buildSearchRequest()
+     */
+    private SearchRequest buildSearchRequest() {
+        SearchRequest searchRequest = new SearchRequest();
+        searchRequest.indices(MLIndex.MCP_TOOLS.getIndexName());
+
+        MatchAllQueryBuilder queryBuilder = QueryBuilders.matchAllQuery();
+        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+        searchSourceBuilder.version(true);
+        searchSourceBuilder.query(queryBuilder);
+        searchRequest.source(searchSourceBuilder);
+        searchRequest.source().size(MAX_TOOL_NUMBER);
+        return searchRequest;
+    }
+
+    /**
+     * Parse MCP tool from JSON string
+     * This duplicates the logic from McpToolsHelper.parseMcpTool()
+     */
+    private McpToolRegisterInput parseMcpTool(String input) throws IOException {
+        try (XContentParser parser = jsonXContent.createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, input)) {
+            ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
+            return McpToolRegisterInput.parse(parser);
+        } catch (IOException e) {
+            log.error("Failed to parse mcp tools configuration: {}", input);
+            throw e;
         }
     }
 }

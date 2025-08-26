@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
+import org.opensearch.transport.client.Client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -36,14 +37,16 @@ public class McpStatelessServerSetup {
     public McpStatelessServerSetup(
             MLIndicesHandler mlIndicesHandler,
             McpToolsHelper mcpToolsHelper,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            Client client
     ) {
         this.mlIndicesHandler = mlIndicesHandler;
         this.mcpToolsHelper = mcpToolsHelper;
+        // Create stateless tools helper with client from the plugin context
         this.statelessToolsHelper = new McpStatelessToolsHelper(
-                mcpToolsHelper.getToolFactoryWrapper(),
+                client,
                 mcpToolsHelper.getThreadPool(),
-                mcpToolsHelper);
+                mcpToolsHelper.getToolFactoryWrapper());
         this.objectMapper = objectMapper;
     }
 

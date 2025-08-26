@@ -6,6 +6,7 @@
 package org.opensearch.ml.action.mcpserver;
 
 import java.io.IOException;
+import java.util.Map;
 
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
 
@@ -80,8 +81,28 @@ public class OpenSearchMcpStatelessServerTransportProvider implements McpStatele
                         .map(response -> (McpSchema.JSONRPCMessage) response);
             } else if (message instanceof McpSchema.JSONRPCNotification notification) {
                 log.debug("Handling JSON-RPC notification: {}", notification.method());
-                return mcpHandler.handleNotification(transportContext, notification)
-                        .then(Mono.empty());
+                
+                // Handle different types of notifications
+                switch (notification.method()) {
+                    case "notifications/initialized":
+                        log.info("✅ Received notifications/initialized - stateless server is ready and operational");
+                        // For stateless servers, this notification is informational
+                        break;
+                        
+                    case "notifications/ready":
+                        log.info("✅ Received notifications/ready - acknowledging server readiness");
+                        break;
+                        
+                    default:
+                        log.info("📢 Handling custom notification: {}", notification.method());
+                        // Let the MCP framework handle other notifications
+                        mcpHandler.handleNotification(transportContext, notification).subscribe();
+                        break;
+                }
+                
+                // Notifications are one-way, so we don't send responses back
+                // This is the correct behavior for MCP notifications
+                return Mono.empty();
             } else {
                 log.error("Unknown message type: {}", message.getClass().getSimpleName());
                 return Mono.error(new RuntimeException("Unknown message type"));

@@ -6,6 +6,7 @@
 package org.opensearch.ml.action.mcpserver;
 
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
+import org.opensearch.transport.client.Client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -20,13 +21,15 @@ public class McpStatelessServerHolder {
 
     private static volatile MLIndicesHandler mlIndicesHandler;
     private static volatile McpToolsHelper mcpToolsHelper;
+    private static volatile Client client;
     private static volatile McpStatelessServerSetup serverSetup;
     private static volatile McpStatelessAsyncServer statelessServer;
     private static volatile OpenSearchMcpStatelessServerTransportProvider transportProvider;
 
-    public static void init(MLIndicesHandler mlIndicesHandler, McpToolsHelper mcpToolsHelper) {
+    public static void init(MLIndicesHandler mlIndicesHandler, McpToolsHelper mcpToolsHelper, Client client) {
         McpStatelessServerHolder.mlIndicesHandler = mlIndicesHandler;
         McpStatelessServerHolder.mcpToolsHelper = mcpToolsHelper;
+        McpStatelessServerHolder.client = client;
     }
 
     public static McpStatelessAsyncServer getStatelessServerInstance() {
@@ -44,7 +47,7 @@ public class McpStatelessServerHolder {
             
             // Create server setup and build the server
             serverSetup = new McpStatelessServerSetup(
-                    mlIndicesHandler, mcpToolsHelper, new ObjectMapper());
+                    mlIndicesHandler, mcpToolsHelper, new ObjectMapper(), client);
             log.info("Server setup created successfully");
 
             // Create the server first, which will initialize the transport provider
