@@ -149,10 +149,18 @@ public class QueryPlanningPromptTemplate {
         + EXAMPLE_11
         + EXAMPLE_12;
 
+    public static final String example = """
+        {"category":["Women's Shoes","Women's Clothing"],"currency":"EUR","customer_first_name":"Diane","customer_full_name":"Diane Goodwin","customer_gender":"FEMALE","customer_id":22,"customer_last_name":"Goodwin","customer_phone":"","day_of_week":"Sunday","day_of_week_i":6,"email":"diane@goodwin-family.zzz","manufacturer":["Low Tide Media","Pyramidustries"],"order_date":"2023-11-26T21:44:38+00:00","order_id":574586,"products":[{"base_price":59.99,"discount_percentage":0,"quantity":1,"manufacturer":"Low Tide Media","tax_amount":0,"product_id":5419,"category":"Women's Shoes","sku":"ZO0376303763","taxless_price":59.99,"unit_discount_amount":0,"min_price":31.79,"_id":"sold_product_574586_5419","discount_amount":0,"created_on":"2016-12-18T21:44:38+00:00","product_name":"Winter boots - brown","price":59.99,"taxful_price":59.99,"base_unit_price":59.99},{"base_price":11.99,"discount_percentage":0,"quantity":1,"manufacturer":"Pyramidustries","tax_amount":0,"product_id":19325,"category":"Women's Clothing","sku":"ZO0212402124","taxless_price":11.99,"unit_discount_amount":0,"min_price":6.47,"_id":"sold_product_574586_19325","discount_amount":0,"created_on":"2016-12-18T21:44:38+00:00","product_name":"Shorts - dark blue/pink/dark green","price":11.99,"taxful_price":11.99,"base_unit_price":11.99}],"sku":["ZO0376303763","ZO0212402124"],"taxful_total_price":71.98,"taxless_total_price":71.98,"total_quantity":2,"total_unique_products":2,"type":"order","user":"diane","geoip":{"country_iso_code":"GB","location":{"lon":-0.1,"lat":51.5},"continent_name":"Europe"},"event":{"dataset":"sample_ecommerce"}}
+        """;
     public static final String PROMPT_SUFFIX = "==== INPUT ====\n"
         + "Question: ${parameters.query_text}\n"
         + "Mapping: ${parameters.index_mapping:-}\n"
         + "Query Fields: ${parameters.query_fields:-}\n\n"
+        + "A sample document for your reference: "
+        + example
+        + "\n \n"
+        + "The user provided a search template which is relavent to this question, try using this: \n"
+        + "${parameters.template:-}"
         + "==== OUTPUT ====\n"
         + "GIVE THE OUTPUT PART ONLY IN YOUR RESPONSE (a single JSON object)\n"
         + "Output:";

@@ -82,6 +82,9 @@ public class QueryPlanningTool implements WithModelTool {
         if (parameters.containsKey(QUERY_FIELDS_FIELD)) {
             parameters.put(QUERY_FIELDS_FIELD, gson.toJson(parameters.get(QUERY_FIELDS_FIELD)));
         }
+        if (parameters.containsKey("template")) {
+            parameters.put("template", gson.toJson(parameters.get("template")));
+        }
         ActionListener<T> modelListener = ActionListener.wrap(r -> {
             try {
                 String queryString = (String) r;
