@@ -10,6 +10,7 @@ import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedTok
 import static org.opensearch.ml.common.memorycontainer.MemoryContainerConstants.DEFAULT_UPDATE_MEMORY_PROMPT;
 import static org.opensearch.ml.common.memorycontainer.MemoryContainerConstants.MEMORY_DECISION_FIELD;
 import static org.opensearch.ml.common.memorycontainer.MemoryContainerConstants.PERSONAL_INFORMATION_ORGANIZER_PROMPT;
+import static org.apache.commons.text.StringEscapeUtils.escapeJson;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,7 +21,6 @@ import org.opensearch.OpenSearchException;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
-import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.ml.common.FunctionName;
 import org.opensearch.ml.common.dataset.remote.RemoteInferenceInputDataSet;
@@ -31,6 +31,7 @@ import org.opensearch.ml.common.memorycontainer.MemoryStorageConfig;
 import org.opensearch.ml.common.output.MLOutput;
 import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.output.model.ModelTensors;
+import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.common.transport.MLTaskResponse;
 import org.opensearch.ml.common.transport.memorycontainer.memory.MessageInput;
 import org.opensearch.ml.common.transport.prediction.MLPredictionTaskAction;
@@ -65,24 +66,17 @@ public class MemoryProcessingService {
         stringParameters.put("system_prompt", PERSONAL_INFORMATION_ORGANIZER_PROMPT);
 
         try {
-            XContentBuilder messagesBuilder = jsonXContent.contentBuilder();
-            messagesBuilder.startArray();
+            StringBuilder user_messages = new StringBuilder();
 
             for (MessageInput message : messages) {
-                messagesBuilder.startObject();
-                messagesBuilder.field("role", message.getRole() != null ? message.getRole() : "user");
-                messagesBuilder.startArray("content");
-                messagesBuilder.startObject();
-                messagesBuilder.field("type", "text");
-                messagesBuilder.field("text", message.getContent());
-                messagesBuilder.endObject();
-                messagesBuilder.endArray();
-                messagesBuilder.endObject();
+                if(message.getRole() != null && message.getRole().equals("user")) {
+                    user_messages.append(message.getContent());
+                }
             }
 
-            messagesBuilder.endArray();
-            String messagesJson = messagesBuilder.toString();
-            stringParameters.put("messages", messagesJson);
+            String messagesJson = user_messages.toString();
+            // Escape the messages string since it will be used as a string value in the connector template
+            stringParameters.put("messages", escapeJson(messagesJson));
 
             log.debug("LLM request - processing {} messages", messages.size());
         } catch (Exception e) {
@@ -147,21 +141,8 @@ public class MemoryProcessingService {
         String decisionRequestJson = decisionRequest.toJsonString();
 
         try {
-            XContentBuilder messagesBuilder = jsonXContent.contentBuilder();
-            messagesBuilder.startArray();
-            messagesBuilder.startObject();
-            messagesBuilder.field("role", "user");
-            messagesBuilder.startArray("content");
-            messagesBuilder.startObject();
-            messagesBuilder.field("type", "text");
-            messagesBuilder.field("text", decisionRequestJson);
-            messagesBuilder.endObject();
-            messagesBuilder.endArray();
-            messagesBuilder.endObject();
-            messagesBuilder.endArray();
-
-            String messagesJson = messagesBuilder.toString();
-            stringParameters.put("messages", messagesJson);
+            // Manually escape the JSON string since it will be used as a string value in the connector template
+            stringParameters.put("messages", escapeJson(decisionRequestJson));
 
             log
                 .debug(
@@ -214,46 +195,106 @@ public class MemoryProcessingService {
             return facts;
         }
 
-        for (int i = 0; i < modelTensors.getMlModelTensors().size(); i++) {
-            Map<String, ?> dataMap = modelTensors.getMlModelTensors().get(i).getDataAsMap();
-            if (dataMap != null && dataMap.containsKey("content")) {
-                try {
-                    List<?> contentList = (List<?>) dataMap.get("content");
-                    if (contentList != null && !contentList.isEmpty()) {
-                        Map<String, ?> contentItem = (Map<String, ?>) contentList.get(0);
-                        if (contentItem != null && contentItem.containsKey("text")) {
-                            String responseStr = String.valueOf(contentItem.get("text"));
+        // Try to extract the response content generically
+        String responseContent = extractResponseContent(modelTensors.getMlModelTensors().get(0).getDataAsMap());
+        if (responseContent == null) {
+            log.warn("Could not extract response content from LLM response");
+            return facts;
+        }
 
-                            try (
-                                XContentParser parser = jsonXContent
-                                    .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, responseStr)
-                            ) {
-                                ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
+        // Parse the JSON response to extract facts
+        try (
+            XContentParser parser = jsonXContent
+                .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, responseContent)
+        ) {
+            ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
 
-                                while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
-                                    String fieldName = parser.currentName();
-                                    if ("facts".equals(fieldName)) {
-                                        ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.nextToken(), parser);
-                                        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
-                                            String fact = parser.text();
-                                            facts.add(fact);
-                                        }
-                                    } else {
-                                        parser.skipChildren();
-                                    }
-                                }
-                            }
-                        }
+            while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                String fieldName = parser.currentName();
+                if ("facts".equals(fieldName)) {
+                    ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.nextToken(), parser);
+                    while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                        String fact = parser.text();
+                        facts.add(fact);
                     }
-                } catch (Exception e) {
-                    log.error("Failed to extract content from dataMap", e);
-                    throw new IllegalArgumentException("Failed to extract content from LLM response", e);
+                } else {
+                    parser.skipChildren();
                 }
-                break;
             }
+        } catch (Exception e) {
+            log.error("Failed to parse facts from LLM response: {}", responseContent, e);
+            throw new IllegalArgumentException("Failed to parse facts from LLM response", e);
         }
 
         return facts;
+    }
+
+    /**
+     * Generic method to extract response content from different LLM providers
+     * Follows the same pattern as Agentic Search and other ML Commons components
+     * Handles OpenAI, Claude, Bedrock, and other provider response formats
+     */
+    private String extractResponseContent(Map<String, ?> dataMap) {
+        if (dataMap == null) {
+            return null;
+        }
+
+        // Pattern 1: Simple response field (most common pattern across ML Commons)
+        if (dataMap.containsKey("response")) {
+            return (String) dataMap.get("response");
+        }
+
+        // Pattern 2: OpenAI format - choices[0].message.content
+        if (dataMap.containsKey("choices")) {
+            try {
+                List<?> choices = (List<?>) dataMap.get("choices");
+                if (choices != null && !choices.isEmpty()) {
+                    Map<String, ?> firstChoice = (Map<String, ?>) choices.get(0);
+                    if (firstChoice.containsKey("message")) {
+                        Map<String, ?> message = (Map<String, ?>) firstChoice.get("message");
+                        if (message.containsKey("content")) {
+                            return (String) message.get("content");
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse OpenAI format response", e);
+            }
+        }
+
+        // Pattern 3: Claude/Bedrock Converse format - content[0].text
+        if (dataMap.containsKey("content")) {
+            try {
+                List<?> contentList = (List<?>) dataMap.get("content");
+                if (contentList != null && !contentList.isEmpty()) {
+                    Map<String, ?> contentItem = (Map<String, ?>) contentList.get(0);
+                    if (contentItem.containsKey("text")) {
+                        return (String) contentItem.get("text");
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse Claude/Bedrock format response", e);
+            }
+        }
+
+        // Pattern 4: Bedrock completion format
+        if (dataMap.containsKey("completion")) {
+            return (String) dataMap.get("completion");
+        }
+
+        // Pattern 5: Cohere text format
+        if (dataMap.containsKey("text")) {
+            return (String) dataMap.get("text");
+        }
+
+        // Pattern 6: Fallback - return entire response as JSON string (like MLModelTool)
+        log.warn("Could not extract response content using standard patterns. Available keys: {}. Returning full response as JSON.", dataMap.keySet());
+        try {
+            return StringUtils.toJson(dataMap);
+        } catch (Exception e) {
+            log.error("Failed to serialize response as JSON", e);
+            return null;
+        }
     }
 
     private List<MemoryDecision> parseMemoryDecisions(MLTaskResponse response) {
@@ -269,24 +310,13 @@ public class MemoryProcessingService {
                 throw new IllegalStateException("No model output tensors found");
             }
 
-            Map<String, ?> dataMap = tensors.get(0).getMlModelTensors().get(0).getDataAsMap();
-
-            String responseContent = null;
-            if (dataMap.containsKey("response")) {
-                responseContent = (String) dataMap.get("response");
-            } else if (dataMap.containsKey("content")) {
-                List<Map<String, Object>> contentList = (List<Map<String, Object>>) dataMap.get("content");
-                if (contentList != null && !contentList.isEmpty()) {
-                    Map<String, Object> firstContent = contentList.get(0);
-                    responseContent = (String) firstContent.get("text");
-                }
-            }
-
+            // Use the generic response content extraction
+            String responseContent = extractResponseContent(tensors.get(0).getMlModelTensors().get(0).getDataAsMap());
             if (responseContent == null) {
                 throw new IllegalStateException("No response content found in LLM output");
             }
 
-            // Clean response content
+            // Clean response content (remove markdown code blocks if present)
             if (responseContent.startsWith("```json") && responseContent.endsWith("```")) {
                 responseContent = responseContent.substring(7, responseContent.length() - 3).trim();
             } else if (responseContent.startsWith("```") && responseContent.endsWith("```")) {
