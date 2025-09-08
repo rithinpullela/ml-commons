@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput;
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
 import org.opensearch.transport.client.Client;
 
@@ -120,9 +121,9 @@ public class McpStatelessServerSetup {
         AtomicReference<Exception> errorRef = new AtomicReference<>();
 
         // Use the existing searchAllTools method - same as SSE server
-        mcpToolsHelper.searchAllTools(new org.opensearch.core.action.ActionListener<List<org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput>>() {
+        mcpToolsHelper.searchAllTools(new org.opensearch.core.action.ActionListener<List<McpToolRegisterInput>>() {
             @Override
-            public void onResponse(List<org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput> tools) {
+            public void onResponse(List<McpToolRegisterInput> tools) {
                 try {
                     // Convert existing tools to STATELESS MCP format using our new helper
                     List<McpStatelessServerFeatures.AsyncToolSpecification> mcpTools = tools.stream()
@@ -162,10 +163,6 @@ public class McpStatelessServerSetup {
             }
 
             List<McpStatelessServerFeatures.AsyncToolSpecification> tools = toolsRef.get();
-            if (tools == null || tools.isEmpty()) {
-                log.warn("No tools loaded from infrastructure, creating test tool");
-                return List.of(createTestTool());
-            }
 
             return tools;
 
@@ -175,20 +172,4 @@ public class McpStatelessServerSetup {
         }
     }
 
-    /**
-     * Create a test tool for fallback
-     */
-    private McpStatelessServerFeatures.AsyncToolSpecification createTestTool() {
-        // Use the same constructor pattern as McpStatelessServerFeatures.AsyncToolSpecification
-        return new McpStatelessServerFeatures.AsyncToolSpecification(
-                new McpSchema.Tool("test_tool", "A test tool for validation", "{}"),
-                (ctx, request) -> {
-                    String result = "Test tool executed successfully with args: " + request.arguments().toString();
-                    return Mono.just(new McpSchema.CallToolResult(
-                            List.of(new McpSchema.TextContent(result)),
-                            false
-                    ));
-                }
-        );
-    }
 }

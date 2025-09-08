@@ -6,8 +6,10 @@
 package org.opensearch.ml.rest.mcpserver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.spec.McpSchema;
 import lombok.extern.log4j.Log4j2;
 import org.opensearch.OpenSearchException;
+import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.BytesRestResponse;
@@ -56,11 +58,10 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
 
         return channel -> {
             try {
-                // Read request body
-                String requestBody = request.content().utf8ToString();
+                final String requestBody = request.content().utf8ToString();
                 log.info("Received stateless MCP request: {}", requestBody);
 
-                // Ensure the stateless server is initialized by getting the server instance first
+                // Ensure server initialized
                 try {
                     McpStatelessServerHolder.getStatelessServerInstance();
                 } catch (Exception e) {
@@ -69,7 +70,6 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
                     return;
                 }
 
-                // Get the transport provider from the holder
                 var transportProvider = McpStatelessServerHolder.getTransportProvider();
                 if (transportProvider == null || !transportProvider.isHandlerReady()) {
                     log.error("MCP transport provider not ready - server may not be properly initialized");
@@ -79,7 +79,30 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
 
                 log.info("MCP transport provider ready, handling request");
 
-                // Handle the request using the MCP framework
+                // Parse just enough to tell request vs notification
+                McpSchema.JSONRPCMessage msg;
+                try {
+                    msg = McpSchema.deserializeJsonRpcMessage(objectMapper, requestBody);
+                } catch (Exception e) {
+                    log.error("Invalid JSON-RPC message", e);
+                    sendErrorResponse(channel, "1", "Invalid JSON-RPC message: " + e.getMessage());
+                    return;
+                }
+
+                if (msg instanceof McpSchema.JSONRPCNotification) {
+                    // 1) Immediately acknowledge with 202 and NO BODY
+                    channel.sendResponse(new BytesRestResponse(RestStatus.ACCEPTED, "application/json", BytesArray.EMPTY));
+
+                    // 2) Process asynchronously; don't attempt to write to channel again
+                    transportProvider.handleRequest(requestBody)
+                            .subscribe(
+                                    ignored -> { /* no-op; notifications don’t produce responses */ },
+                                    err -> log.error("Notification handling failed", err)
+                            );
+                    return;
+                }
+
+                // Regular JSON-RPC request: await response and return 200 with body
                 transportProvider.handleRequest(requestBody)
                         .subscribe(
                                 response -> {
@@ -103,6 +126,7 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
             }
         };
     }
+
 
     private void sendErrorResponse(RestChannel channel, String id, String errorMessage) {
         try {

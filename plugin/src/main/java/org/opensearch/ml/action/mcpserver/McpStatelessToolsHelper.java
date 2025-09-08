@@ -85,12 +85,9 @@ public class McpStatelessToolsHelper {
         Tool actualTool = factory.create(Optional.ofNullable(tool.getParameters()).orElse(ImmutableMap.of()));
 
         // MCP server doesn't allow null schema - same logic as McpToolsHelper
-        String schema = Optional
-                .ofNullable(tool.getAttributes())
-                .map(x -> StringUtils.gson.toJson(x.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD)))
-                .orElse(
-                        Optional.ofNullable(actualTool.getAttributes()).map(x -> (String) x.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD)).orElse("{}")
-                );
+        String schema = Optional.ofNullable(getSchema(tool.getAttributes()))
+                .orElse(Optional.ofNullable(getSchema(actualTool.getAttributes()))
+                        .orElse("{}"));
 
         String description = Optional.ofNullable(tool.getDescription()).orElse(factory.getDefaultDescription());
 
@@ -110,6 +107,29 @@ public class McpStatelessToolsHelper {
                 })
         );
     }
+
+    private static String getSchema(Map<String, Object> attrs) {
+        if (attrs == null || attrs.isEmpty()) return null;
+
+        Object v = attrs.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD);
+        if (v == null) return null;
+
+        // Pass through JSON strings as-is (avoid double-encoding)
+        if (v instanceof String s) {
+            s = s.trim();
+            if (s.isEmpty()) return null;          // treat empty as absent
+            return s;                               // already JSON text: {"type":"object",...}
+        }
+
+        // If it’s a JSON tree, serialize it
+        if (v instanceof com.google.gson.JsonElement je) {
+            return StringUtils.gson.toJson(je);
+        }
+
+        // If it’s a Map/POJO, serialize to JSON
+        return StringUtils.gson.toJson(v);
+    }
+
 
     /**
      * Get the tool factory wrapper for external use
