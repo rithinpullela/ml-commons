@@ -25,6 +25,7 @@ import org.opensearch.common.xcontent.LoggingDeprecationHandler;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.MatchAllQueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.ml.common.CommonValue;
@@ -168,6 +169,38 @@ public class McpStatelessToolsHelper {
         }
     }
 
+    public void searchToolsWithVersion(List<String> toolNames, ActionListener<List<McpToolRegisterInput>> listener) {
+        ActionListener<SearchResponse> actionListener = createSearchResponseListener(listener);
+        SearchRequest searchRequest = buildSearchRequest(toolNames);
+        searchRequest.source().version(true);
+        client.search(searchRequest, actionListener);
+    }
+
+    private ActionListener<SearchResponse> createSearchResponseListener(ActionListener<List<McpToolRegisterInput>> listener) {
+        return ActionListener.wrap(r -> {
+            List<McpToolRegisterInput> mcpTools = new ArrayList<>();
+            Arrays.stream(Objects.requireNonNull(r.getHits().getHits())).forEach(x -> {
+                try {
+                    McpToolRegisterInput mcpTool = parseMcpTool(x.getSourceAsString());
+                    mcpTools.add(mcpTool);
+                } catch (IOException e) {
+                    listener.onFailure(e);
+                }
+            });
+            listener.onResponse(mcpTools);
+        }, e -> {
+            String errMsg = String.format(Locale.ROOT, "Failed to search mcp tools index with error: %s", e.getMessage());
+            log.error(errMsg, e);
+            listener.onFailure(new OpenSearchException(errMsg));
+        });
+    }
+
+    public void searchToolsWithPrimaryTermAndSeqNo(List<String> toolNames, ActionListener<SearchResponse> listener) {
+        SearchRequest searchRequest = buildSearchRequest(toolNames);
+        searchRequest.source().seqNoAndPrimaryTerm(true);
+        client.search(searchRequest, listener);
+    }
+
     /**
      * Start the sync job for auto-reloading MCP tools
      * This duplicates the logic from McpToolsHelper.startSyncMcpToolsJob()
@@ -198,16 +231,22 @@ public class McpStatelessToolsHelper {
                             .doOnError(x -> log.error("Failed to auto load tool: {}", value.v1().getName(), x))
                             .subscribe();
                     } else if (McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.get(key) < value.v2()) {
+                        // Chain the operations to avoid race conditions
                         McpStatelessServerHolder
                             .getMcpStatelessAsyncServerInstance()
                             .removeTool(key)
-                            .onErrorResume(e -> Mono.empty())
-                            .subscribe();
-                        McpStatelessServerHolder
-                            .getMcpStatelessAsyncServerInstance()
-                            .addTool(createToolSpecification(value.v1()))
-                            .doOnSuccess(x -> McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put(key, value.v2()))
-                            .doOnError(x -> log.error("Failed to auto load tool: {}", value.v1().getName(), x))
+                            .onErrorResume(e -> {
+                                log.warn("Failed to remove old tool version: {}", key, e);
+                                return Mono.empty();
+                            })
+                            .then(McpStatelessServerHolder
+                                .getMcpStatelessAsyncServerInstance()
+                                .addTool(createToolSpecification(value.v1())))
+                            .doOnSuccess(x -> {
+                                McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put(key, value.v2());
+                                log.info("Successfully updated tool: {} to version: {}", key, value.v2());
+                            })
+                            .doOnError(x -> log.error("Failed to update tool: {} to version: {}", value.v1().getName(), value.v2(), x))
                             .subscribe();
                     }
                 });
@@ -269,6 +308,18 @@ public class McpStatelessToolsHelper {
         return searchRequest;
     }
 
+    private SearchRequest buildSearchRequest(List<String> toolNames) {
+        SearchRequest searchRequest = new SearchRequest();
+        searchRequest.indices(MLIndex.MCP_TOOLS.getIndexName());
+
+        BoolQueryBuilder queryBuilder = QueryBuilders.boolQuery();
+        toolNames.forEach(toolName -> queryBuilder.should(QueryBuilders.matchQuery("name", toolName)));
+        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+        searchSourceBuilder.query(queryBuilder);
+        searchRequest.source(searchSourceBuilder);
+        return searchRequest;
+    }
+
     /**
      * Parse MCP tool from JSON string
      * This duplicates the logic from McpToolsHelper.parseMcpTool()
@@ -285,6 +336,7 @@ public class McpStatelessToolsHelper {
 
     /**
      * Load tools from existing infrastructure using the same logic as SSE server
+     * This method is no longer used since we follow the SSE pattern with dynamic loading
      */
     public List<McpStatelessServerFeatures.AsyncToolSpecification> loadToolsFromInfrastructure() {
         log.debug("Loading tools from existing infrastructure for stateless MCP server");

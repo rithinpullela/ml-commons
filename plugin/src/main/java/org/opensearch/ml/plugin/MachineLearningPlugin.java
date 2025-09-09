@@ -178,8 +178,6 @@ import org.opensearch.ml.common.transport.deploy.MLDeployModelAction;
 import org.opensearch.ml.common.transport.deploy.MLDeployModelOnNodeAction;
 import org.opensearch.ml.common.transport.execute.MLExecuteTaskAction;
 import org.opensearch.ml.common.transport.forward.MLForwardAction;
-import org.opensearch.ml.common.transport.mcpserver.action.MLMcpMessageAction;
-import org.opensearch.ml.common.transport.mcpserver.action.MLMcpMessageDispatchAction;
 import org.opensearch.ml.common.transport.mcpserver.action.MLMcpToolsListAction;
 import org.opensearch.ml.common.transport.mcpserver.action.MLMcpToolsRegisterAction;
 import org.opensearch.ml.common.transport.mcpserver.action.MLMcpToolsRegisterOnNodesAction;
@@ -468,7 +466,6 @@ public class MachineLearningPlugin extends Plugin
     private Map<String, Tool.Factory> toolFactories;
     private ScriptService scriptService;
     private Encryptor encryptor;
-    private McpToolsHelper mcpToolsHelper;
     private McpStatelessToolsHelper statelessToolsHelper;
 
     public MachineLearningPlugin() {}
@@ -551,8 +548,6 @@ public class MachineLearningPlugin extends Plugin
                 new ActionHandler<>(MLMcpToolsRegisterOnNodesAction.INSTANCE, TransportMcpToolsRegisterOnNodesAction.class),
                 new ActionHandler<>(MLMcpToolsRemoveAction.INSTANCE, TransportMcpToolsRemoveAction.class),
                 new ActionHandler<>(MLMcpToolsRemoveOnNodesAction.INSTANCE, TransportMcpToolsRemoveOnNodesAction.class),
-                new ActionHandler<>(MLMcpMessageAction.INSTANCE, TransportMcpMessageAction.class),
-                new ActionHandler<>(MLMcpMessageDispatchAction.INSTANCE, TransportMcpMessageDispatchedAction.class),
                 new ActionHandler<>(MLMcpToolsListAction.INSTANCE, TransportMcpToolsListAction.class),
                 new ActionHandler<>(MLMcpToolsUpdateAction.INSTANCE, TransportMcpToolsUpdateAction.class),
                 new ActionHandler<>(MLMcpToolsUpdateOnNodesAction.INSTANCE, TransportMcpToolsUpdateOnNodesAction.class)
@@ -836,8 +831,6 @@ public class MachineLearningPlugin extends Plugin
             MLAdoptionMetricsCounter.initialize(clusterService.getClusterName().toString(), metricsRegistry, mlFeatureEnabledSetting);
         }
 
-        mcpToolsHelper = new McpToolsHelper(client, threadPool, toolFactoryWrapper);
-        McpAsyncServerHolder.init(mlIndicesHandler, mcpToolsHelper);
         statelessToolsHelper = new McpStatelessToolsHelper(client, threadPool, toolFactoryWrapper);
         McpStatelessServerHolder.init(statelessToolsHelper);
 
@@ -871,7 +864,6 @@ public class MachineLearningPlugin extends Plugin
                 cmHandler,
                 sdkClient,
                 toolFactoryWrapper,
-                mcpToolsHelper,
                 statelessToolsHelper
             );
     }
@@ -961,10 +953,6 @@ public class MachineLearningPlugin extends Plugin
         RestMLGetToolAction restMLGetToolAction = new RestMLGetToolAction(toolFactories);
         RestMLGetConfigAction restMLGetConfigAction = new RestMLGetConfigAction(mlFeatureEnabledSetting);
         RestMLCancelBatchJobAction restMLCancelBatchJobAction = new RestMLCancelBatchJobAction();
-        RestMcpConnectionMessageStreamingAction restMcpConnectionMessageStreamingAction = new RestMcpConnectionMessageStreamingAction(
-            clusterService,
-            mlFeatureEnabledSetting
-        );
         RestMCPStatelessStreamingAction restMcpStatelessStreamingAction = new RestMCPStatelessStreamingAction(mlFeatureEnabledSetting);
         RestMLMcpToolsRegisterAction restMLRegisterMcpToolsAction = new RestMLMcpToolsRegisterAction(
             toolFactories,
@@ -1037,7 +1025,6 @@ public class MachineLearningPlugin extends Plugin
                 restMLGetToolAction,
                 restMLGetConfigAction,
                 restMLCancelBatchJobAction,
-                restMcpConnectionMessageStreamingAction,
                 restMcpStatelessStreamingAction,
                 restMLRegisterMcpToolsAction,
                 restMLRemoveMcpToolsAction,
