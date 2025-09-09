@@ -5,18 +5,15 @@
 
 package org.opensearch.ml.action.mcpserver;
 
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.opensearch.core.action.ActionListener;
-import org.opensearch.rest.StreamingRestChannel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpStatelessAsyncServer;
-import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import lombok.extern.log4j.Log4j2;
 
@@ -26,7 +23,6 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class McpStatelessServerHolder {
 
-    public static Map<String, StreamingRestChannel> CHANNELS = new ConcurrentHashMap<>();
     public static Map<String, Long> IN_MEMORY_MCP_TOOLS = new ConcurrentHashMap<>();
     private static volatile McpStatelessToolsHelper statelessToolsHelper;
     private static volatile McpStatelessAsyncServer mcpStatelessAsyncServer;
@@ -40,14 +36,15 @@ public class McpStatelessServerHolder {
         try {
             log.info("Starting to create stateless MCP server...");
 
-            McpSchema.ServerCapabilities serverCapabilities = McpSchema.ServerCapabilities.builder()
+            McpSchema.ServerCapabilities serverCapabilities = McpSchema.ServerCapabilities
+                .builder()
                 .tools(true)
                 .logging()
                 .resources(false, false)  // We don't support resources
                 .prompts(false)           // We don't support prompts
                 .build();
             // Build the server using the transport provider WITHOUT pre-loaded tools
-            // Tools will be loaded dynamically via the sync job, just like the SSE server
+            // Tools will be loaded dynamically via the sync job
             log.info("Building MCP server without pre-loaded tools (dynamic loading)...");
             McpStatelessAsyncServer server = McpServer
                 .async(serverTransport)
@@ -58,15 +55,19 @@ public class McpStatelessServerHolder {
 
             log.info("Stateless MCP server created successfully");
 
-            // Start the sync job for dynamic tool loading (same as SSE server)
+            // Start the sync job for dynamic tool loading
             statelessToolsHelper.startSyncMcpToolsJob();
             log.info("Started dynamic tool loading sync job");
-            
+
             // Also run the initial tool loading immediately (don't wait for the first scheduled run)
-            statelessToolsHelper.autoLoadAllMcpTools(ActionListener.wrap(
-                success -> log.info("Initial tool loading completed successfully"),
-                error -> log.error("Initial tool loading failed", error)
-            ));
+            statelessToolsHelper
+                .autoLoadAllMcpTools(
+                    ActionListener
+                        .wrap(
+                            success -> log.info("Initial tool loading completed successfully"),
+                            error -> log.error("Initial tool loading failed", error)
+                        )
+                );
 
             // Verify that the transport provider now has a handler
             if (serverTransport.isHandlerReady()) {

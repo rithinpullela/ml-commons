@@ -73,7 +73,7 @@ public class TransportMcpToolsRemoveOnNodesActionTests extends OpenSearchTestCas
 
     private TransportMcpToolsRemoveOnNodesAction action;
 
-    private McpToolsHelper mcpToolsHelper;
+    private McpStatelessToolsHelper mcpStatelessToolsHelper;
 
     @Rule
     public ExpectedException exceptionRule = ExpectedException.none();
@@ -93,7 +93,7 @@ public class TransportMcpToolsRemoveOnNodesActionTests extends OpenSearchTestCas
             client,
             xContentRegistry
         );
-        mcpToolsHelper = new McpToolsHelper(client, threadPool, toolFactoryWrapper);
+        mcpStatelessToolsHelper = new McpStatelessToolsHelper(client, threadPool, toolFactoryWrapper);
     }
 
     @Test
@@ -139,10 +139,10 @@ public class TransportMcpToolsRemoveOnNodesActionTests extends OpenSearchTestCas
     @Test
     public void testNodeOperation() {
         MLMcpToolsRemoveNodeRequest request = new MLMcpToolsRemoveNodeRequest(toRemoveTools);
-        McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS.put("ListIndexTool", 1L);
-        McpAsyncServerHolder
-            .getMcpAsyncServerInstance()
-            .addTool(mcpToolsHelper.createToolSpecification(getRegisterMcpTool("ListIndexTool")))
+        McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put("ListIndexTool", 1L);
+        McpStatelessServerHolder
+            .getMcpStatelessAsyncServerInstance()
+            .addTool(mcpStatelessToolsHelper.createToolSpecification(getRegisterMcpTool("ListIndexTool")))
             .onErrorResume(e -> {
                 return Mono.empty();
             })
@@ -156,7 +156,7 @@ public class TransportMcpToolsRemoveOnNodesActionTests extends OpenSearchTestCas
         exceptionRule.expect(FailedNodeException.class);
         exceptionRule.expectMessage("[ListIndexTool] not found on node: localNodeId");
         MLMcpToolsRemoveNodeRequest request = new MLMcpToolsRemoveNodeRequest(toRemoveTools);
-        McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS.put("ListIndexTool", 1L);
+        McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put("ListIndexTool", 1L);
         action.nodeOperation(request);
     }
 

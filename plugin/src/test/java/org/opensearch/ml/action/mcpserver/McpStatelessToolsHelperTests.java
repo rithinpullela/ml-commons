@@ -53,7 +53,7 @@ import org.opensearch.transport.client.Client;
 
 import com.google.common.collect.ImmutableMap;
 
-public class McpToolsHelperTests extends OpenSearchTestCase {
+public class McpStatelessToolsHelperTests extends OpenSearchTestCase {
 
     @Mock
     private Client client;
