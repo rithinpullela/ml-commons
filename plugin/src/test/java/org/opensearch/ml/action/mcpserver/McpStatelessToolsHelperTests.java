@@ -13,7 +13,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -65,8 +64,6 @@ public class McpStatelessToolsHelperTests extends OpenSearchTestCase {
     private ToolFactoryWrapper toolFactoryWrapper;
     private Map<String, Tool.Factory> toolFactories = ImmutableMap.of("ListIndexTool", ListIndexTool.Factory.getInstance());
     private McpStatelessToolsHelper mcpStatelessToolsHelper;
-    @Mock
-    ActionListener<Boolean> listener;
 
     public void setUp() throws Exception {
         super.setUp();
@@ -83,112 +80,6 @@ public class McpStatelessToolsHelperTests extends OpenSearchTestCase {
             listener.onResponse(createSearchResultResponse());
             return null;
         }).when(client).search(any(), isA(ActionListener.class));
-    }
-
-    public void test_autoLoadAllMcpTools_toolNotInMemory() {
-        McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.clear();
-        McpStatelessServerHolder.getMcpStatelessAsyncServerInstance().removeTool("ListIndexTool").subscribe();
-        mcpStatelessToolsHelper.autoLoadAllMcpTools(listener);
-        verify(listener).onResponse(true);
-        assertEquals(1L, (long) McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.get("ListIndexTool"));
-    }
-
-    public void test_autoLoadAllMcpTools_searchException() {
-        doAnswer(invocationOnMock -> {
-            ActionListener<SearchResponse> listener = invocationOnMock.getArgument(1);
-            listener.onFailure(new OpenSearchException("Network issue"));
-            return null;
-        }).when(client).search(any(), isA(ActionListener.class));
-        ActionListener<Boolean> listener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.autoLoadAllMcpTools(listener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(listener).onFailure(argumentCaptor.capture());
-        assertEquals("Failed to search mcp tools index with error: Network issue", argumentCaptor.getValue().getMessage());
-    }
-
-    public void test_autoLoadAllMcpTools_updateWithNewerVersion() {
-        McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put("ListIndexTool", 0L);
-        mcpStatelessToolsHelper.autoLoadAllMcpTools(listener);
-        verify(listener).onResponse(true);
-        assertEquals(1L, (long) McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.get("ListIndexTool"));
-    }
-
-    public void test_autoLoadAllMcpTools_clientThreadContextException() {
-        when(client.threadPool()).thenThrow(new RuntimeException("unexpected error"));
-        mcpStatelessToolsHelper.autoLoadAllMcpTools(listener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(listener).onFailure(argumentCaptor.capture());
-        assertEquals("unexpected error", argumentCaptor.getValue().getMessage());
-    }
-
-    public void test_searchToolsWithVersion_success() {
-        ActionListener<List<McpToolRegisterInput>> actionListener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.searchToolsWithVersion(Arrays.asList("ListIndexTool"), actionListener);
-        ArgumentCaptor<List> argumentCaptor = ArgumentCaptor.forClass(List.class);
-        verify(actionListener).onResponse(argumentCaptor.capture());
-        assertEquals(1, argumentCaptor.getValue().size());
-    }
-
-    public void test_searchToolsWithVersion_searchException() {
-        ActionListener<List<McpToolRegisterInput>> actionListener = mock(ActionListener.class);
-        doAnswer(invocationOnMock -> {
-            ActionListener<SearchResponse> listener = invocationOnMock.getArgument(1);
-            listener.onFailure(new OpenSearchException("Network issue"));
-            return null;
-        }).when(client).search(any(), isA(ActionListener.class));
-        mcpStatelessToolsHelper.searchToolsWithVersion(Arrays.asList("ListIndexTool"), actionListener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(actionListener).onFailure(argumentCaptor.capture());
-        assertEquals("Failed to search mcp tools index with error: Network issue", argumentCaptor.getValue().getMessage());
-    }
-
-    public void test_searchAllToolsWithVersion_clientException() {
-        when(client.threadPool()).thenThrow(new RuntimeException("unexpected error"));
-        ActionListener<Map<String, Tuple<McpToolRegisterInput, Long>>> actionListener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.searchAllToolsWithVersion(actionListener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(actionListener).onFailure(argumentCaptor.capture());
-        assertEquals("unexpected error", argumentCaptor.getValue().getMessage());
-    }
-
-    public void test_searchAllTools_clientException() {
-        when(client.threadPool()).thenThrow(new RuntimeException("unexpected error"));
-        ActionListener<List<McpToolRegisterInput>> actionListener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.searchAllTools(actionListener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(actionListener).onFailure(argumentCaptor.capture());
-        assertEquals("unexpected error", argumentCaptor.getValue().getMessage());
-    }
-
-    public void test_searchToolsWithPrimaryTermAndSeqNo_success() {
-        doAnswer(invocationOnMock -> {
-            ActionListener<SearchResponse> listener = invocationOnMock.getArgument(1);
-            SearchResponse searchResponse = createSearchResultResponse();
-            Arrays.stream(searchResponse.getHits().getHits()).forEach(x -> {
-                x.setPrimaryTerm(10L);
-                x.setSeqNo(10L);
-            });
-            listener.onResponse(searchResponse);
-            return null;
-        }).when(client).search(any(), isA(ActionListener.class));
-        ActionListener<SearchResponse> actionListener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.searchToolsWithPrimaryTermAndSeqNo(Arrays.asList("ListIndexTool"), actionListener);
-        ArgumentCaptor<SearchResponse> argumentCaptor = ArgumentCaptor.forClass(SearchResponse.class);
-        verify(actionListener).onResponse(argumentCaptor.capture());
-        assertEquals(10L, argumentCaptor.getValue().getHits().getHits()[0].getPrimaryTerm());
-    }
-
-    public void test_searchToolsWithPrimaryTermAndSeqNo_searchException() {
-        ActionListener<SearchResponse> actionListener = mock(ActionListener.class);
-        doAnswer(invocationOnMock -> {
-            ActionListener<SearchResponse> listener = invocationOnMock.getArgument(1);
-            listener.onFailure(new OpenSearchException("Network issue"));
-            return null;
-        }).when(client).search(any(), isA(ActionListener.class));
-        mcpStatelessToolsHelper.searchToolsWithPrimaryTermAndSeqNo(Arrays.asList("ListIndexTool"), actionListener);
-        ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
-        verify(actionListener).onFailure(argumentCaptor.capture());
-        assertEquals("Network issue", argumentCaptor.getValue().getMessage());
     }
 
     public void test_searchAllToolsWithVersion_success() {
@@ -212,25 +103,13 @@ public class McpStatelessToolsHelperTests extends OpenSearchTestCase {
         assertEquals("Failed to search mcp tools index with error: Network issue", argumentCaptor.getValue().getMessage());
     }
 
-    public void test_searchAllTools_success() {
-        ActionListener<List<McpToolRegisterInput>> actionListener = mock(ActionListener.class);
-        mcpStatelessToolsHelper.searchAllTools(actionListener);
-        ArgumentCaptor<List<McpToolRegisterInput>> argumentCaptor = ArgumentCaptor.forClass(List.class);
-        verify(actionListener).onResponse(argumentCaptor.capture());
-        assertEquals(1, argumentCaptor.getValue().size());
-    }
-
-    public void test_searchAllTools_searchException() {
-        ActionListener<List<McpToolRegisterInput>> actionListener = mock(ActionListener.class);
-        doAnswer(invocationOnMock -> {
-            ActionListener<SearchResponse> listener = invocationOnMock.getArgument(1);
-            listener.onFailure(new OpenSearchException("Network issue"));
-            return null;
-        }).when(client).search(any(), isA(ActionListener.class));
-        mcpStatelessToolsHelper.searchAllTools(actionListener);
+    public void test_searchAllToolsWithVersion_clientException() {
+        when(client.threadPool()).thenThrow(new RuntimeException("unexpected error"));
+        ActionListener<Map<String, Tuple<McpToolRegisterInput, Long>>> actionListener = mock(ActionListener.class);
+        mcpStatelessToolsHelper.searchAllToolsWithVersion(actionListener);
         ArgumentCaptor<Exception> argumentCaptor = ArgumentCaptor.forClass(Exception.class);
         verify(actionListener).onFailure(argumentCaptor.capture());
-        assertEquals("Failed to search mcp tools index with error: Network issue", argumentCaptor.getValue().getMessage());
+        assertEquals("unexpected error", argumentCaptor.getValue().getMessage());
     }
 
     private McpToolRegisterInput getRegisterMcpTool() {

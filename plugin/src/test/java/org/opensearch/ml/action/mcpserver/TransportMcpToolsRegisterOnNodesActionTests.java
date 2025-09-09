@@ -91,6 +91,9 @@ public class TransportMcpToolsRegisterOnNodesActionTests extends OpenSearchTestC
             toolFactoryWrapper,
             mcpStatelessToolsHelper
         );
+        
+        // Initialize the McpStatelessServerHolder for testing
+        McpStatelessServerHolder.init(mcpStatelessToolsHelper);
     }
 
     @Test
