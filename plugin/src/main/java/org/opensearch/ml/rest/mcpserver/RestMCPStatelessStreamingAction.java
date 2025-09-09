@@ -5,26 +5,28 @@
 
 package org.opensearch.ml.rest.mcpserver;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.modelcontextprotocol.spec.McpSchema;
-import lombok.extern.log4j.Log4j2;
-import org.opensearch.OpenSearchException;
-import org.opensearch.core.common.bytes.BytesArray;
-import org.opensearch.core.rest.RestStatus;
-import org.opensearch.rest.BaseRestHandler;
-import org.opensearch.rest.BytesRestResponse;
-import org.opensearch.rest.RestChannel;
-import org.opensearch.rest.RestRequest;
-import org.opensearch.transport.client.node.NodeClient;
-import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
-import org.opensearch.ml.action.mcpserver.McpStatelessServerHolder;
+import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_MCP_SERVER_DISABLED_MESSAGE;
+import static org.opensearch.rest.RestRequest.Method.POST;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_MCP_SERVER_DISABLED_MESSAGE;
-import static org.opensearch.rest.RestRequest.Method.POST;
+import org.opensearch.OpenSearchException;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.rest.RestStatus;
+import org.opensearch.ml.action.mcpserver.McpStatelessServerHolder;
+import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
+import org.opensearch.rest.BaseRestHandler;
+import org.opensearch.rest.BytesRestResponse;
+import org.opensearch.rest.RestChannel;
+import org.opensearch.rest.RestRequest;
+import org.opensearch.transport.client.node.NodeClient;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.modelcontextprotocol.spec.McpSchema;
+import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 public class RestMCPStatelessStreamingAction extends BaseRestHandler {
@@ -61,16 +63,7 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
                 final String requestBody = request.content().utf8ToString();
                 log.info("Received stateless MCP request: {}", requestBody);
 
-                // Ensure server initialized
-                try {
-                    McpStatelessServerHolder.getStatelessServerInstance();
-                } catch (Exception e) {
-                    log.error("Failed to initialize stateless MCP server", e);
-                    sendErrorResponse(channel, "1", "Failed to initialize MCP server: " + e.getMessage());
-                    return;
-                }
-
-                var transportProvider = McpStatelessServerHolder.getTransportProvider();
+                var transportProvider = McpStatelessServerHolder.getMcpStatelessServerTransportProvider();
                 if (transportProvider == null || !transportProvider.isHandlerReady()) {
                     log.error("MCP transport provider not ready - server may not be properly initialized");
                     sendErrorResponse(channel, "1", "MCP handler not ready - server initialization failed");
@@ -94,31 +87,28 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
                     channel.sendResponse(new BytesRestResponse(RestStatus.ACCEPTED, "application/json", BytesArray.EMPTY));
 
                     // 2) Process asynchronously; don't attempt to write to channel again
-                    transportProvider.handleRequest(requestBody)
-                            .subscribe(
-                                    ignored -> { /* no-op; notifications don’t produce responses */ },
-                                    err -> log.error("Notification handling failed", err)
-                            );
+                    transportProvider
+                        .handleRequest(requestBody)
+                        .subscribe(
+                            ignored -> { /* no-op; notifications don’t produce responses */ },
+                            err -> log.error("Notification handling failed", err)
+                        );
                     return;
                 }
 
                 // Regular JSON-RPC request: await response and return 200 with body
-                transportProvider.handleRequest(requestBody)
-                        .subscribe(
-                                response -> {
-                                    try {
-                                        String responseJson = objectMapper.writeValueAsString(response);
-                                        channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));
-                                    } catch (Exception e) {
-                                        log.error("Failed to send response", e);
-                                        sendErrorResponse(channel, "1", "Failed to send response: " + e.getMessage());
-                                    }
-                                },
-                                error -> {
-                                    log.error("Failed to handle MCP request", error);
-                                    sendErrorResponse(channel, "1", "Internal server error: " + error.getMessage());
-                                }
-                        );
+                transportProvider.handleRequest(requestBody).subscribe(response -> {
+                    try {
+                        String responseJson = objectMapper.writeValueAsString(response);
+                        channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));
+                    } catch (Exception e) {
+                        log.error("Failed to send response", e);
+                        sendErrorResponse(channel, "1", "Failed to send response: " + e.getMessage());
+                    }
+                }, error -> {
+                    log.error("Failed to handle MCP request", error);
+                    sendErrorResponse(channel, "1", "Internal server error: " + error.getMessage());
+                });
 
             } catch (Exception e) {
                 log.error("Failed to handle stateless MCP request", e);
@@ -127,17 +117,9 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
         };
     }
 
-
     private void sendErrorResponse(RestChannel channel, String id, String errorMessage) {
         try {
-            Map<String, Object> response = Map.of(
-                    "jsonrpc", "2.0",
-                    "id", id,
-                    "error", Map.of(
-                            "code", -32603,
-                            "message", errorMessage
-                    )
-            );
+            Map<String, Object> response = Map.of("jsonrpc", "2.0", "id", id, "error", Map.of("code", -32603, "message", errorMessage));
 
             String responseJson = objectMapper.writeValueAsString(response);
             channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));

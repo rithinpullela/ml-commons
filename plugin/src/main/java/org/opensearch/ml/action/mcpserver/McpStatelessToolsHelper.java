@@ -10,14 +10,10 @@ import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedTok
 import static org.opensearch.ml.plugin.MachineLearningPlugin.GENERAL_THREAD_POOL;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.search.SearchRequest;
@@ -62,9 +58,6 @@ public class McpStatelessToolsHelper {
     private final ThreadPool threadPool;
     private final ToolFactoryWrapper toolFactoryWrapper;
 
-    // Track tools in memory (similar to McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS)
-    private final Map<String, Long> inMemoryTools = new ConcurrentHashMap<>();
-
     public McpStatelessToolsHelper(Client client, ThreadPool threadPool, ToolFactoryWrapper toolFactoryWrapper) {
         this.client = client;
         this.threadPool = threadPool;
@@ -75,7 +68,7 @@ public class McpStatelessToolsHelper {
      * Create stateless MCP tool specification from existing tool definition.
      * This replicates the exact logic from McpToolsHelper.createToolSpecification()
      */
-    public McpStatelessServerFeatures.AsyncToolSpecification createStatelessToolSpecification(McpToolBaseInput tool) {
+    public McpStatelessServerFeatures.AsyncToolSpecification createToolSpecification(McpToolBaseInput tool) {
         String toolName = Optional.ofNullable(tool.getName()).orElse(tool.getType());
         Tool.Factory factory = toolFactoryWrapper.getToolsFactories().get(tool.getType());
         if (factory == null) {
@@ -85,39 +78,39 @@ public class McpStatelessToolsHelper {
         Tool actualTool = factory.create(Optional.ofNullable(tool.getParameters()).orElse(ImmutableMap.of()));
 
         // MCP server doesn't allow null schema - same logic as McpToolsHelper
-        String schema = Optional.ofNullable(getSchema(tool.getAttributes()))
-                .orElse(Optional.ofNullable(getSchema(actualTool.getAttributes()))
-                        .orElse("{}"));
+        String schema = Optional
+            .ofNullable(getSchema(tool.getAttributes()))
+            .orElse(Optional.ofNullable(getSchema(actualTool.getAttributes())).orElse("{}"));
 
         String description = Optional.ofNullable(tool.getDescription()).orElse(factory.getDefaultDescription());
 
         return new McpStatelessServerFeatures.AsyncToolSpecification(
-                new McpSchema.Tool(toolName, String.valueOf(description), schema),
-                (ctx, request) -> Mono.create(sink -> {
-                    // ✅ EXACT SAME EXECUTION LOGIC as McpToolsHelper
-                    ActionListener<String> actionListener = ActionListener
-                            .wrap(r -> sink.success(new McpSchema.CallToolResult(List.of(new McpSchema.TextContent(r)), false)),
-                                    e -> {
-                                        log.error("Failed to execute tool, tool name: {}", toolName, e);
-                                        sink.error(e);
-                                    });
+            new McpSchema.Tool(toolName, String.valueOf(description), schema),
+            (ctx, request) -> Mono.create(sink -> {
+                ActionListener<String> actionListener = ActionListener
+                    .wrap(r -> sink.success(new McpSchema.CallToolResult(List.of(new McpSchema.TextContent(r)), false)), e -> {
+                        log.error("Failed to execute tool, tool name: {}", toolName, e);
+                        sink.error(e);
+                    });
 
-                    // ✅ EXACT SAME actualTool.run() CALL
-                    actualTool.run(StringUtils.getParameterMap(request.arguments()), actionListener);
-                })
+                actualTool.run(StringUtils.getParameterMap(request.arguments()), actionListener);
+            })
         );
     }
 
     private static String getSchema(Map<String, Object> attrs) {
-        if (attrs == null || attrs.isEmpty()) return null;
+        if (attrs == null || attrs.isEmpty())
+            return null;
 
         Object v = attrs.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD);
-        if (v == null) return null;
+        if (v == null)
+            return null;
 
         // Pass through JSON strings as-is (avoid double-encoding)
         if (v instanceof String s) {
             s = s.trim();
-            if (s.isEmpty()) return null;          // treat empty as absent
+            if (s.isEmpty())
+                return null;          // treat empty as absent
             return s;                               // already JSON text: {"type":"object",...}
         }
 
@@ -129,7 +122,6 @@ public class McpStatelessToolsHelper {
         // If it’s a Map/POJO, serialize to JSON
         return StringUtils.gson.toJson(v);
     }
-
 
     /**
      * Get the tool factory wrapper for external use
@@ -143,20 +135,6 @@ public class McpStatelessToolsHelper {
      */
     public ThreadPool getThreadPool() {
         return threadPool;
-    }
-
-    /**
-     * Track tool in memory (similar to McpAsyncServerHolder.IN_MEMORY_MCP_TOOLS)
-     */
-    public void trackTool(String toolName, long version) {
-        inMemoryTools.put(toolName, version);
-    }
-
-    /**
-     * Get tracked tools in memory
-     */
-    public Map<String, Long> getInMemoryTools() {
-        return inMemoryTools;
     }
 
     /**
@@ -210,25 +188,66 @@ public class McpStatelessToolsHelper {
     public void autoLoadAllMcpTools(ActionListener<Boolean> listener) {
         try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
             ActionListener<Boolean> restoreListener = ActionListener.runBefore(listener, context::restore);
-            ActionListener<List<McpToolRegisterInput>> searchListener = ActionListener.wrap(tools -> {
-                try {
-                    tools.forEach(tool -> {
-                        String toolName = Optional.ofNullable(tool.getName()).orElse(tool.getType());
-                        trackTool(toolName, System.currentTimeMillis());
-                    });
-                    log.debug("Successfully reloaded {} MCP tools for stateless server", tools.size());
-                    restoreListener.onResponse(true);
-                } catch (Exception e) {
-                    log.error("Failed to process reloaded tools", e);
-                    restoreListener.onFailure(e);
-                }
+            ActionListener<Map<String, Tuple<McpToolRegisterInput, Long>>> searchListener = ActionListener.wrap(r -> {
+                r.forEach((key, value) -> {
+                    if (!McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.containsKey(key)) {
+                        McpStatelessServerHolder
+                            .getMcpStatelessAsyncServerInstance()
+                            .addTool(createToolSpecification(value.v1()))
+                            .doOnSuccess(y -> McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put(key, value.v2()))
+                            .doOnError(x -> log.error("Failed to auto load tool: {}", value.v1().getName(), x))
+                            .subscribe();
+                    } else if (McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.get(key) < value.v2()) {
+                        McpStatelessServerHolder
+                            .getMcpStatelessAsyncServerInstance()
+                            .removeTool(key)
+                            .onErrorResume(e -> Mono.empty())
+                            .subscribe();
+                        McpStatelessServerHolder
+                            .getMcpStatelessAsyncServerInstance()
+                            .addTool(createToolSpecification(value.v1()))
+                            .doOnSuccess(x -> McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put(key, value.v2()))
+                            .doOnError(x -> log.error("Failed to auto load tool: {}", value.v1().getName(), x))
+                            .subscribe();
+                    }
+                });
+                startSyncMcpToolsJob();
+                restoreListener.onResponse(true);
             }, e -> {
-                log.error("Failed to reload MCP tools for stateless server", e);
+                log.error("Failed to auto load all MCP tools to MCP server", e);
                 restoreListener.onFailure(e);
             });
-            searchAllTools(searchListener);
+            searchAllToolsWithVersion(searchListener);
         } catch (Exception e) {
-            log.error("Failed to auto-reload MCP tools for stateless server", e);
+            log.error("Failed to auto load all MCP tools to MCP server", e);
+            listener.onFailure(e);
+        }
+    }
+
+    public void searchAllToolsWithVersion(ActionListener<Map<String, Tuple<McpToolRegisterInput, Long>>> listener) {
+        try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
+            ActionListener<Map<String, Tuple<McpToolRegisterInput, Long>>> restoreListener = ActionListener
+                .runBefore(listener, context::restore);
+            ActionListener<SearchResponse> actionListener = ActionListener.wrap(r -> {
+                Map<String, Tuple<McpToolRegisterInput, Long>> mcpTools = new HashMap<>();
+                Arrays.stream(Objects.requireNonNull(r.getHits().getHits())).forEach(x -> {
+                    long version = x.getVersion();
+                    try {
+                        McpToolRegisterInput mcpTool = parseMcpTool(x.getSourceAsString());
+                        mcpTools.put(mcpTool.getName(), Tuple.tuple(mcpTool, version));
+                    } catch (IOException e) {
+                        restoreListener.onFailure(e);
+                    }
+                });
+                restoreListener.onResponse(mcpTools);
+            }, e -> {
+                String errMsg = String.format(Locale.ROOT, "Failed to search mcp tools index with error: %s", e.getMessage());
+                log.error(errMsg, e);
+                restoreListener.onFailure(new OpenSearchException(errMsg));
+            });
+            client.search(buildSearchRequest(), actionListener);
+        } catch (Exception e) {
+            log.error("Failed to search mcp tools index", e);
             listener.onFailure(e);
         }
     }
@@ -261,6 +280,69 @@ public class McpStatelessToolsHelper {
         } catch (IOException e) {
             log.error("Failed to parse mcp tools configuration: {}", input);
             throw e;
+        }
+    }
+
+    /**
+     * Load tools from existing infrastructure using the same logic as SSE server
+     */
+    public List<McpStatelessServerFeatures.AsyncToolSpecification> loadToolsFromInfrastructure() {
+        log.debug("Loading tools from existing infrastructure for stateless MCP server");
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<List<McpStatelessServerFeatures.AsyncToolSpecification>> toolsRef = new AtomicReference<>();
+        AtomicReference<Exception> errorRef = new AtomicReference<>();
+
+        // Use the existing searchAllTools method - same as SSE server
+        searchAllTools(new org.opensearch.core.action.ActionListener<List<McpToolRegisterInput>>() {
+            @Override
+            public void onResponse(List<McpToolRegisterInput> tools) {
+                try {
+                    // Convert existing tools to STATELESS MCP format using our new helper
+                    List<McpStatelessServerFeatures.AsyncToolSpecification> mcpTools = tools
+                        .stream()
+                        .map(tool -> createToolSpecification(tool))
+                        .toList();
+
+                    toolsRef.set(mcpTools);
+                    log.info("Successfully loaded {} tools from existing infrastructure", mcpTools.size());
+
+                    // Start sync job for auto-reloading
+                    startSyncMcpToolsJob();
+
+                } catch (Exception e) {
+                    errorRef.set(e);
+                    log.error("Failed to convert tools to MCP format", e);
+                } finally {
+                    latch.countDown();
+                }
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                errorRef.set(e);
+                log.error("Failed to load tools from infrastructure", e);
+                latch.countDown();
+            }
+        });
+
+        try {
+            // Wait for tools to load
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new RuntimeException("Timeout waiting for tools to load");
+            }
+
+            if (errorRef.get() != null) {
+                throw errorRef.get();
+            }
+
+            List<McpStatelessServerFeatures.AsyncToolSpecification> tools = toolsRef.get();
+
+            return tools;
+
+        } catch (Exception e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while loading tools", e);
         }
     }
 }

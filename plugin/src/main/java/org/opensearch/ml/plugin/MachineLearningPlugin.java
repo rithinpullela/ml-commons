@@ -469,6 +469,7 @@ public class MachineLearningPlugin extends Plugin
     private ScriptService scriptService;
     private Encryptor encryptor;
     private McpToolsHelper mcpToolsHelper;
+    private McpStatelessToolsHelper statelessToolsHelper;
 
     public MachineLearningPlugin() {}
 
@@ -837,7 +838,8 @@ public class MachineLearningPlugin extends Plugin
 
         mcpToolsHelper = new McpToolsHelper(client, threadPool, toolFactoryWrapper);
         McpAsyncServerHolder.init(mlIndicesHandler, mcpToolsHelper);
-        McpStatelessServerHolder.init(mlIndicesHandler, mcpToolsHelper, client);
+        statelessToolsHelper = new McpStatelessToolsHelper(client, threadPool, toolFactoryWrapper);
+        McpStatelessServerHolder.init(statelessToolsHelper);
 
         return ImmutableList
             .of(
@@ -869,7 +871,8 @@ public class MachineLearningPlugin extends Plugin
                 cmHandler,
                 sdkClient,
                 toolFactoryWrapper,
-                mcpToolsHelper
+                mcpToolsHelper,
+                statelessToolsHelper
             );
     }
 

@@ -5,12 +5,18 @@
 
 package org.opensearch.ml.action.mcpserver;
 
-import org.opensearch.ml.engine.indices.MLIndicesHandler;
-import org.opensearch.transport.client.Client;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.opensearch.rest.StreamingRestChannel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpStatelessAsyncServer;
+import io.modelcontextprotocol.server.McpStatelessServerFeatures;
+import io.modelcontextprotocol.spec.McpSchema;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -19,78 +25,80 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class McpStatelessServerHolder {
 
-    private static volatile MLIndicesHandler mlIndicesHandler;
-    private static volatile McpToolsHelper mcpToolsHelper;
-    private static volatile Client client;
-    private static volatile McpStatelessServerSetup serverSetup;
-    private static volatile McpStatelessAsyncServer statelessServer;
-    private static volatile OpenSearchMcpStatelessServerTransportProvider transportProvider;
+    public static Map<String, StreamingRestChannel> CHANNELS = new ConcurrentHashMap<>();
+    public static Map<String, Long> IN_MEMORY_MCP_TOOLS = new ConcurrentHashMap<>();
+    private static volatile McpStatelessToolsHelper statelessToolsHelper;
+    private static volatile McpStatelessAsyncServer mcpStatelessAsyncServer;
+    private static volatile OpenSearchMcpStatelessServerTransportProvider mcpStatelessServerTransportProvider;
 
-    public static void init(MLIndicesHandler mlIndicesHandler, McpToolsHelper mcpToolsHelper, Client client) {
-        McpStatelessServerHolder.mlIndicesHandler = mlIndicesHandler;
-        McpStatelessServerHolder.mcpToolsHelper = mcpToolsHelper;
-        McpStatelessServerHolder.client = client;
+    public static void init(McpStatelessToolsHelper statelessToolsHelper) {
+        McpStatelessServerHolder.statelessToolsHelper = statelessToolsHelper;
     }
 
-    public static McpStatelessAsyncServer getStatelessServerInstance() {
-        if (statelessServer != null) {
-            log.debug("Returning existing stateless MCP server instance");
-            return statelessServer;
+    private static McpStatelessAsyncServer createMcpStatelessServer(OpenSearchMcpStatelessServerTransportProvider serverTransport) {
+        try {
+            log.info("Starting to create stateless MCP server...");
+
+            // Load tools from existing infrastructure
+            log.info("Loading tools from existing infrastructure...");
+            List<McpStatelessServerFeatures.AsyncToolSpecification> tools = statelessToolsHelper.loadToolsFromInfrastructure();
+            log.info("Loaded {} tools from infrastructure", tools.size());
+
+            McpSchema.ServerCapabilities serverCapabilities = McpSchema.ServerCapabilities.builder().tools(true).logging().build();
+            // Build the server using the transport provider AND add the tools
+            // The MCP framework will automatically call setMcpHandler on the transport provider
+            log.info("Building MCP server with {} tools...", tools.size());
+            McpStatelessAsyncServer server = McpServer
+                .async(serverTransport)
+                .serverInfo("OpenSearch-MCP-Stateless-Server", "0.1.0")
+                .capabilities(serverCapabilities)
+                .tools(tools)
+                .instructions("OpenSearch MCP Stateless Server - provides access to ML tools without sessions")
+                .build();
+
+            log.info("Stateless MCP server created and initialized with {} tools", tools.size());
+
+            // Verify that the transport provider now has a handler
+            if (serverTransport.isHandlerReady()) {
+                log.info("Transport provider handler is ready - server initialization successful");
+            } else {
+                log.warn("Transport provider handler is not ready - this may indicate an issue");
+            }
+
+            return server;
+
+        } catch (Exception e) {
+            log.error("Failed to create stateless MCP server", e);
+            throw new RuntimeException("Failed to create stateless MCP server", e);
+        }
+    }
+
+    public static OpenSearchMcpStatelessServerTransportProvider getMcpStatelessServerTransportProvider() {
+        if (mcpStatelessServerTransportProvider != null) {
+            return mcpStatelessServerTransportProvider;
         }
         synchronized (McpStatelessServerHolder.class) {
-            if (statelessServer != null) {
-                log.debug("Returning existing stateless MCP server instance (double-checked)");
-                return statelessServer;
+            if (mcpStatelessServerTransportProvider != null) {
+                return mcpStatelessServerTransportProvider;
             }
-
-            log.info("Creating new stateless MCP server instance...");
-            
-            // Create server setup and build the server
-            serverSetup = new McpStatelessServerSetup(
-                    mlIndicesHandler, mcpToolsHelper, new ObjectMapper(), client);
-            log.info("Server setup created successfully");
-
-            // Create the server first, which will initialize the transport provider
-            statelessServer = serverSetup.createStatelessServer();
-            log.info("Stateless MCP server created and initialized");
-
-            // Now get the transport provider reference after it's been initialized
-            transportProvider = serverSetup.getTransportProvider();
-            log.info("Transport provider retrieved from setup after server initialization");
-
-            return statelessServer;
-        }
-    }
-
-    public static OpenSearchMcpStatelessServerTransportProvider getTransportProvider() {
-        if (transportProvider != null) {
-            return transportProvider;
-        }
-        synchronized (McpStatelessServerHolder.class) {
-            if (transportProvider != null) {
-                return transportProvider;
+            mcpStatelessServerTransportProvider = new OpenSearchMcpStatelessServerTransportProvider(
+                new ObjectMapper()
+            );
+            // initialize the server
+            if (mcpStatelessAsyncServer == null) {
+                mcpStatelessAsyncServer = createMcpStatelessServer(mcpStatelessServerTransportProvider);
             }
-            
-            // Initialize the server if not already done
-            getStatelessServerInstance();
-            return transportProvider;
+            return mcpStatelessServerTransportProvider;
         }
     }
 
-    public static boolean isStatelessServerAvailable() {
-        return statelessServer != null;
-    }
-
-    public static void shutdown() {
-        if (statelessServer != null) {
-            try {
-                statelessServer.close();
-                log.info("Stateless MCP server shutdown successfully");
-            } catch (Exception e) {
-                log.error("Error during stateless MCP server shutdown", e);
+    public static McpStatelessAsyncServer getMcpStatelessAsyncServerInstance() {
+        if (mcpStatelessAsyncServer == null) {
+            synchronized (McpAsyncServerHolder.class) {
+                getMcpStatelessServerTransportProvider();
             }
-            statelessServer = null;
-            transportProvider = null;
         }
+        return mcpStatelessAsyncServer;
     }
+
 }
