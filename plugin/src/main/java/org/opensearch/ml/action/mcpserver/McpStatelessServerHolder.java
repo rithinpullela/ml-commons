@@ -32,10 +32,10 @@ public class McpStatelessServerHolder {
         McpStatelessServerHolder.statelessToolsHelper = statelessToolsHelper;
     }
 
-    private static McpStatelessAsyncServer createMcpStatelessServer(OpenSearchMcpStatelessServerTransportProvider serverTransport) {
+    private static McpStatelessAsyncServer createMcpStatelessServer(
+        OpenSearchMcpStatelessServerTransportProvider mcpStatelessServerTransportProvider
+    ) {
         try {
-            log.info("Starting to create stateless MCP server...");
-
             McpSchema.ServerCapabilities serverCapabilities = McpSchema.ServerCapabilities
                 .builder()
                 .tools(true)
@@ -47,7 +47,7 @@ public class McpStatelessServerHolder {
             // Tools will be loaded dynamically via the sync job
             log.info("Building MCP server without pre-loaded tools (dynamic loading)...");
             McpStatelessAsyncServer server = McpServer
-                .async(serverTransport)
+                .async(mcpStatelessServerTransportProvider)
                 .serverInfo("OpenSearch-MCP-Stateless-Server", "0.1.0")
                 .capabilities(serverCapabilities)
                 .instructions("OpenSearch MCP Stateless Server - provides access to ML tools without sessions")
@@ -55,11 +55,7 @@ public class McpStatelessServerHolder {
 
             log.info("Stateless MCP server created successfully");
 
-            // Start the sync job for dynamic tool loading
-            statelessToolsHelper.startSyncMcpToolsJob();
-            log.info("Started dynamic tool loading sync job");
-
-            // Also run the initial tool loading immediately (don't wait for the first scheduled run)
+            // Load tools immediately
             statelessToolsHelper
                 .autoLoadAllMcpTools(
                     ActionListener
@@ -70,7 +66,7 @@ public class McpStatelessServerHolder {
                 );
 
             // Verify that the transport provider now has a handler
-            if (serverTransport.isHandlerReady()) {
+            if (mcpStatelessServerTransportProvider.isHandlerReady()) {
                 log.info("Transport provider handler is ready - server initialization successful");
             } else {
                 log.warn("Transport provider handler is not ready - this may indicate an issue");

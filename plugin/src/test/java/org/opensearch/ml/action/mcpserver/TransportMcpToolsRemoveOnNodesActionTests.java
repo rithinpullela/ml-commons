@@ -94,7 +94,7 @@ public class TransportMcpToolsRemoveOnNodesActionTests extends OpenSearchTestCas
             xContentRegistry
         );
         mcpStatelessToolsHelper = new McpStatelessToolsHelper(client, threadPool, toolFactoryWrapper);
-        
+
         // Initialize the McpStatelessServerHolder for testing
         McpStatelessServerHolder.init(mcpStatelessToolsHelper);
     }

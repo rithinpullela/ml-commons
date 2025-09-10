@@ -7,9 +7,8 @@ package org.opensearch.ml.action.mcpserver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import io.modelcontextprotocol.server.DefaultMcpTransportContext;
 import io.modelcontextprotocol.server.McpStatelessServerHandler;
-import io.modelcontextprotocol.server.McpTransportContext;
+import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpStatelessServerTransport;
 import io.modelcontextprotocol.util.Assert;
@@ -47,8 +46,6 @@ public class OpenSearchMcpStatelessServerTransportProvider implements McpStatele
      */
     public Mono<McpSchema.JSONRPCMessage> handleRequest(String requestBody) {
         try {
-            log.info("Handling stateless MCP request: {}", requestBody);
-
             if (mcpHandler == null) {
                 log.error("MCP handler is null - server may not be properly initialized");
                 return Mono.error(new RuntimeException("MCP handler not initialized"));
@@ -57,37 +54,10 @@ public class OpenSearchMcpStatelessServerTransportProvider implements McpStatele
             // Parse the message
             McpSchema.JSONRPCMessage message = McpSchema.deserializeJsonRpcMessage(objectMapper, requestBody);
 
-            // Create minimal transport context
-            McpTransportContext transportContext = new DefaultMcpTransportContext();
-
             // Let MCP framework handle everything else!
             if (message instanceof McpSchema.JSONRPCRequest request) {
                 log.debug("Handling JSON-RPC request: {}", request.method());
-                return mcpHandler.handleRequest(transportContext, request).map(response -> (McpSchema.JSONRPCMessage) response);
-            } else if (message instanceof McpSchema.JSONRPCNotification notification) {
-                log.debug("Handling JSON-RPC notification: {}", notification.method());
-
-                // Handle different types of notifications
-                switch (notification.method()) {
-                    case "notifications/initialized":
-                        log.info("✅ Received notifications/initialized - stateless server is ready and operational");
-                        // For stateless servers, this notification is informational
-                        break;
-
-                    case "notifications/ready":
-                        log.info("✅ Received notifications/ready - acknowledging server readiness");
-                        break;
-
-                    default:
-                        log.info("📢 Handling custom notification: {}", notification.method());
-                        // Let the MCP framework handle other notifications
-                        mcpHandler.handleNotification(transportContext, notification).subscribe();
-                        break;
-                }
-
-                // Notifications are one-way, so we don't send responses back
-                // This is the correct behavior for MCP notifications
-                return Mono.empty();
+                return mcpHandler.handleRequest(McpTransportContext.EMPTY, request).map(response -> (McpSchema.JSONRPCMessage) response);
             } else {
                 log.error("Unknown message type: {}", message.getClass().getSimpleName());
                 return Mono.error(new RuntimeException("Unknown message type"));
@@ -101,7 +71,6 @@ public class OpenSearchMcpStatelessServerTransportProvider implements McpStatele
 
     public boolean isHandlerReady() {
         boolean ready = mcpHandler != null;
-        log.info("Handler ready check: mcpHandler={}, ready={}", mcpHandler != null ? "NOT_NULL" : "NULL", ready);
         return ready;
     }
 }

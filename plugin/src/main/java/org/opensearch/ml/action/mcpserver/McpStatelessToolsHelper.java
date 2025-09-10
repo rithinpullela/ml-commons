@@ -105,39 +105,25 @@ public class McpStatelessToolsHelper {
         if (attrs == null || attrs.isEmpty())
             return null;
 
-        Object v = attrs.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD);
-        if (v == null)
+        Object inputSchema = attrs.get(CommonValue.TOOL_INPUT_SCHEMA_FIELD);
+        if (inputSchema == null)
             return null;
 
         // Pass through JSON strings as-is (avoid double-encoding)
-        if (v instanceof String s) {
-            s = s.trim();
-            if (s.isEmpty())
-                return null;          // treat empty as absent
-            return s;                               // already JSON text: {"type":"object",...}
+        if (inputSchema instanceof String inputSchemaString) {
+            inputSchemaString = inputSchemaString.trim();
+            if (inputSchemaString.isEmpty())
+                return null;
+            return inputSchemaString;
         }
 
         // If it’s a JSON tree, serialize it
-        if (v instanceof com.google.gson.JsonElement je) {
-            return StringUtils.gson.toJson(je);
+        if (inputSchema instanceof com.google.gson.JsonElement jsonElement) {
+            return StringUtils.gson.toJson(jsonElement);
         }
 
         // If it’s a Map/POJO, serialize to JSON
-        return StringUtils.gson.toJson(v);
-    }
-
-    /**
-     * Get the tool factory wrapper for external use
-     */
-    public ToolFactoryWrapper getToolFactoryWrapper() {
-        return toolFactoryWrapper;
-    }
-
-    /**
-     * Get the thread pool for external use
-     */
-    public ThreadPool getThreadPool() {
-        return threadPool;
+        return StringUtils.gson.toJson(inputSchema);
     }
 
     /**
@@ -287,9 +273,6 @@ public class McpStatelessToolsHelper {
         }
     }
 
-    /**
-     * Build search request for all tools
-     */
     private SearchRequest buildSearchRequest() {
         SearchRequest searchRequest = new SearchRequest();
         searchRequest.indices(MLIndex.MCP_TOOLS.getIndexName());
@@ -315,9 +298,6 @@ public class McpStatelessToolsHelper {
         return searchRequest;
     }
 
-    /**
-     * Parse MCP tool from JSON string
-     */
     private McpToolRegisterInput parseMcpTool(String input) throws IOException {
         try (XContentParser parser = jsonXContent.createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, input)) {
             ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);

@@ -16,6 +16,7 @@ import org.opensearch.OpenSearchException;
 import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.ml.action.mcpserver.McpStatelessServerHolder;
+import org.opensearch.ml.action.mcpserver.OpenSearchMcpStatelessServerTransportProvider;
 import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.BytesRestResponse;
@@ -61,70 +62,86 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
         return channel -> {
             try {
                 final String requestBody = request.content().utf8ToString();
-                log.info("Received stateless MCP request: {}", requestBody);
-
-                var transportProvider = McpStatelessServerHolder.getMcpStatelessServerTransportProvider();
-                if (transportProvider == null || !transportProvider.isHandlerReady()) {
-                    log.error("MCP transport provider not ready - server may not be properly initialized");
-                    sendErrorResponse(channel, "1", "MCP handler not ready - server initialization failed");
+                if (requestBody == null || requestBody.isBlank()) {
+                    sendErrorResponse(channel, null, -32700, "Parse error: empty body");
                     return;
                 }
 
-                log.info("MCP transport provider ready, handling request");
+                OpenSearchMcpStatelessServerTransportProvider transportProvider = McpStatelessServerHolder
+                    .getMcpStatelessServerTransportProvider();
+                if (transportProvider == null || !transportProvider.isHandlerReady()) {
+                    log.error("MCP transport provider not ready - server may not be properly initialized");
+                    // Server-side failure: unknown id -> null, server error range
+                    sendErrorResponse(channel, null, -32000, "MCP handler not ready - server initialization failed");
+                    return;
+                }
 
-                // Parse just enough to tell request vs notification
-                McpSchema.JSONRPCMessage msg;
+                // Parse to distinguish request vs notification and extract id (if present)
+                final McpSchema.JSONRPCMessage msg;
                 try {
                     msg = McpSchema.deserializeJsonRpcMessage(objectMapper, requestBody);
                 } catch (Exception e) {
-                    log.error("Invalid JSON-RPC message", e);
-                    sendErrorResponse(channel, "1", "Invalid JSON-RPC message: " + e.getMessage());
+                    log.warn("Invalid JSON-RPC message: {}", e.getMessage());
+                    // Parse error: id unknown
+                    sendErrorResponse(channel, null, -32700, "Parse error: " + e.getMessage());
                     return;
                 }
 
                 if (msg instanceof McpSchema.JSONRPCNotification) {
-                    // 1) Immediately acknowledge with 202 and NO BODY
+                    // Notifications: acknowledge and do not process
                     channel.sendResponse(new BytesRestResponse(RestStatus.ACCEPTED, "application/json", BytesArray.EMPTY));
-
-                    // 2) Process asynchronously; don't attempt to write to channel again
-                    transportProvider
-                        .handleRequest(requestBody)
-                        .subscribe(
-                            ignored -> { /* no-op; notifications don’t produce responses */ },
-                            err -> log.error("Notification handling failed", err)
-                        );
                     return;
                 }
 
-                // Regular JSON-RPC request: await response and return 200 with body
+                // Requests: capture id for any downstream error mapping
+                final Object id = (msg instanceof McpSchema.JSONRPCRequest) ? ((McpSchema.JSONRPCRequest) msg).id() : null;
+
                 transportProvider.handleRequest(requestBody).subscribe(response -> {
                     try {
                         String responseJson = objectMapper.writeValueAsString(response);
                         channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));
                     } catch (Exception e) {
-                        log.error("Failed to send response", e);
-                        sendErrorResponse(channel, "1", "Failed to send response: " + e.getMessage());
+                        log.error("Failed to serialize/send response", e);
+                        sendErrorResponse(channel, id, -32603, "Failed to send response");
                     }
                 }, error -> {
                     log.error("Failed to handle MCP request", error);
-                    sendErrorResponse(channel, "1", "Internal server error: " + error.getMessage());
+                    sendErrorResponse(channel, id, -32603, "Internal server error: " + error.getMessage());
                 });
 
             } catch (Exception e) {
                 log.error("Failed to handle stateless MCP request", e);
-                sendErrorResponse(channel, "1", "Internal server error: " + e.getMessage());
+                // Transport-level catch-all after POST delivered: map to JSON-RPC internal
+                sendErrorResponse(channel, null, -32603, "Internal server error");
             }
         };
     }
 
-    private void sendErrorResponse(RestChannel channel, String id, String errorMessage) {
+    /**
+     * Sends a JSON-RPC 2.0 error envelope with HTTP 200 OK (per JSON-RPC over HTTP conventions).
+     * Use real HTTP 4xx/5xx only for transport-layer failures (wrong method, unsupported media type, etc).
+     */
+    private void sendErrorResponse(RestChannel channel, Object id, int code, String message) {
         try {
-            Map<String, Object> response = Map.of("jsonrpc", "2.0", "id", id, "error", Map.of("code", -32603, "message", errorMessage));
+            Map<String, Object> errorResponse = Map.of("jsonrpc", "2.0", "id", id, "error", Map.of("code", code, "message", message));
 
-            String responseJson = objectMapper.writeValueAsString(response);
+            String responseJson = objectMapper.writeValueAsString(errorResponse);
             channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));
         } catch (Exception e) {
             log.error("Failed to send error response", e);
+            try {
+                channel
+                    .sendResponse(
+                        new BytesRestResponse(
+                            RestStatus.INTERNAL_SERVER_ERROR,
+                            "application/json",
+                            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,\"message\":\"Failed to send error response\"}}"
+                        )
+                    );
+            } catch (Exception inner) {
+                log.error("Even fallback error response failed", inner);
+            }
         }
     }
+
 }

@@ -55,9 +55,7 @@ public class RestMCPStatelessStreamingActionTests extends OpenSearchTestCase {
         exceptionRule
             .expectMessage("The MCP server is not enabled. To enable, please update the setting plugins.ml_commons.mcp_server_enabled");
         when(mlFeatureEnabledSetting.isMcpServerEnabled()).thenReturn(false);
-        RestMCPStatelessStreamingAction messageStreamingAction = new RestMCPStatelessStreamingAction(
-            mlFeatureEnabledSetting
-        );
+        RestMCPStatelessStreamingAction messageStreamingAction = new RestMCPStatelessStreamingAction(mlFeatureEnabledSetting);
         RestRequest request = new FakeRestRequest.Builder(NamedXContentRegistry.EMPTY)
             .withMethod(RestRequest.Method.POST)
             .withPath(RestMCPStatelessStreamingAction.STATELESS_ENDPOINT)
@@ -67,8 +65,7 @@ public class RestMCPStatelessStreamingActionTests extends OpenSearchTestCase {
 
     @Test
     public void test_routes() {
-        assertTrue(restMCPStatelessStreamingAction.routes().stream()
-            .anyMatch(route -> route.getMethod() == RestRequest.Method.POST));
+        assertTrue(restMCPStatelessStreamingAction.routes().stream().anyMatch(route -> route.getMethod() == RestRequest.Method.POST));
         assertEquals(1, restMCPStatelessStreamingAction.routes().size());
     }
 

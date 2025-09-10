@@ -60,8 +60,7 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
               "method": "notifications/initialized"
             }
             """;
-        StepVerifier.create(provider.handleRequest(requestBody))
-            .verifyComplete();
+        StepVerifier.create(provider.handleRequest(requestBody)).verifyComplete();
     }
 
     @Test
@@ -72,8 +71,7 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
               "method": "notifications/ready"
             }
             """;
-        StepVerifier.create(provider.handleRequest(requestBody))
-            .verifyComplete();
+        StepVerifier.create(provider.handleRequest(requestBody)).verifyComplete();
     }
 
     @Test
@@ -84,16 +82,15 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
               "method": "tools/list"
             }
             """;
-        StepVerifier.create(provider.handleRequest(requestBody))
-            .expectErrorMatches(e -> e instanceof Exception)
-            .verify();
+        StepVerifier.create(provider.handleRequest(requestBody)).expectErrorMatches(e -> e instanceof Exception).verify();
     }
 
     @Test
     public void test_handleRequest_handlerNotSet() {
-        OpenSearchMcpStatelessServerTransportProvider providerWithoutHandler = 
-            new OpenSearchMcpStatelessServerTransportProvider(new ObjectMapper());
-        
+        OpenSearchMcpStatelessServerTransportProvider providerWithoutHandler = new OpenSearchMcpStatelessServerTransportProvider(
+            new ObjectMapper()
+        );
+
         String requestBody = """
             {
               "jsonrpc": "2.0",
@@ -101,7 +98,8 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
               "method": "tools/list"
             }
             """;
-        StepVerifier.create(providerWithoutHandler.handleRequest(requestBody))
+        StepVerifier
+            .create(providerWithoutHandler.handleRequest(requestBody))
             .expectErrorMatches(e -> e.getMessage().contains("MCP handler not initialized"))
             .verify();
     }
@@ -124,8 +122,7 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
 
     @Test
     public void test_closeGracefully() {
-        StepVerifier.create(provider.closeGracefully())
-            .verifyComplete();
+        StepVerifier.create(provider.closeGracefully()).verifyComplete();
     }
 
     @Test
@@ -135,8 +132,9 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
 
     @Test
     public void test_isHandlerReady_false() {
-        OpenSearchMcpStatelessServerTransportProvider providerWithoutHandler = 
-            new OpenSearchMcpStatelessServerTransportProvider(new ObjectMapper());
+        OpenSearchMcpStatelessServerTransportProvider providerWithoutHandler = new OpenSearchMcpStatelessServerTransportProvider(
+            new ObjectMapper()
+        );
         assertFalse(providerWithoutHandler.isHandlerReady());
     }
 
