@@ -30,7 +30,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import lombok.extern.log4j.Log4j2;
 
 @Log4j2
-public class RestMCPStatelessStreamingAction extends BaseRestHandler {
+public class RestMcpStatelessStreamingAction extends BaseRestHandler {
 
     private static final String ML_STATELESS_MCP_ACTION = "ml_stateless_mcp_action";
     public static final String STATELESS_ENDPOINT = "/_plugins/_ml/mcp/stream";
@@ -38,7 +38,7 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
     private final MLFeatureEnabledSetting mlFeatureEnabledSetting;
     private final ObjectMapper objectMapper;
 
-    public RestMCPStatelessStreamingAction(MLFeatureEnabledSetting mlFeatureEnabledSetting) {
+    public RestMcpStatelessStreamingAction(MLFeatureEnabledSetting mlFeatureEnabledSetting) {
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
         this.objectMapper = new ObjectMapper();
     }
@@ -61,6 +61,10 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
 
         return channel -> {
             try {
+                if (request.content() == null) {
+                    sendErrorResponse(channel, null, -32700, "Parse error: empty body");
+                    return;
+                }
                 final String requestBody = request.content().utf8ToString();
                 if (requestBody == null || requestBody.isBlank()) {
                     sendErrorResponse(channel, null, -32700, "Parse error: empty body");
@@ -123,7 +127,10 @@ public class RestMCPStatelessStreamingAction extends BaseRestHandler {
      */
     private void sendErrorResponse(RestChannel channel, Object id, int code, String message) {
         try {
-            Map<String, Object> errorResponse = Map.of("jsonrpc", "2.0", "id", id, "error", Map.of("code", code, "message", message));
+            Map<String, Object> errorResponse = new java.util.HashMap<>();
+            errorResponse.put("jsonrpc", "2.0");
+            errorResponse.put("id", id);
+            errorResponse.put("error", Map.of("code", code, "message", message));
 
             String responseJson = objectMapper.writeValueAsString(errorResponse);
             channel.sendResponse(new BytesRestResponse(RestStatus.OK, "application/json", responseJson));

@@ -953,7 +953,7 @@ public class MachineLearningPlugin extends Plugin
         RestMLGetToolAction restMLGetToolAction = new RestMLGetToolAction(toolFactories);
         RestMLGetConfigAction restMLGetConfigAction = new RestMLGetConfigAction(mlFeatureEnabledSetting);
         RestMLCancelBatchJobAction restMLCancelBatchJobAction = new RestMLCancelBatchJobAction();
-        RestMCPStatelessStreamingAction restMcpStatelessStreamingAction = new RestMCPStatelessStreamingAction(mlFeatureEnabledSetting);
+        RestMcpStatelessStreamingAction restMcpStatelessStreamingAction = new RestMcpStatelessStreamingAction(mlFeatureEnabledSetting);
         RestMLMcpToolsRegisterAction restMLRegisterMcpToolsAction = new RestMLMcpToolsRegisterAction(
             toolFactories,
             clusterService,

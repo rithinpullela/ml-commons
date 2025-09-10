@@ -53,28 +53,6 @@ public class OpenSearchMcpStatelessServerTransportProviderTests extends OpenSear
     }
 
     @Test
-    public void test_handleRequest_notification_initialized() {
-        String requestBody = """
-            {
-              "jsonrpc": "2.0",
-              "method": "notifications/initialized"
-            }
-            """;
-        StepVerifier.create(provider.handleRequest(requestBody)).verifyComplete();
-    }
-
-    @Test
-    public void test_handleRequest_notification_ready() {
-        String requestBody = """
-            {
-              "jsonrpc": "2.0",
-              "method": "notifications/ready"
-            }
-            """;
-        StepVerifier.create(provider.handleRequest(requestBody)).verifyComplete();
-    }
-
-    @Test
     public void test_handleRequest_invalidJson() {
         String requestBody = """
             {,

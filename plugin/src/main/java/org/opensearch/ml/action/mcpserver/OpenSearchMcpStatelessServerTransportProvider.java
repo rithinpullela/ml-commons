@@ -7,8 +7,8 @@ package org.opensearch.ml.action.mcpserver;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import io.modelcontextprotocol.server.McpStatelessServerHandler;
 import io.modelcontextprotocol.common.McpTransportContext;
+import io.modelcontextprotocol.server.McpStatelessServerHandler;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpStatelessServerTransport;
 import io.modelcontextprotocol.util.Assert;
