@@ -5,6 +5,7 @@
 
 package org.opensearch.ml.engine.tools;
 
+import static org.opensearch.ml.common.CommonValue.TOOL_INPUT_SCHEMA_FIELD;
 import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_AGENTIC_SEARCH_DISABLED_MESSAGE;
 import static org.opensearch.ml.common.utils.StringUtils.gson;
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT_QUERY;
@@ -17,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import lombok.extern.log4j.Log4j2;
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptRequest;
@@ -36,7 +38,7 @@ import lombok.Setter;
  * //TODO only support llmGenerated for now.
  * //TODO to add in systemSearchTemplates or userSearchTemplates when searchTemplatesTool is implemented.
  */
-
+@Log4j2
 @ToolAnnotation(QueryPlanningTool.TYPE)
 public class QueryPlanningTool implements WithModelTool {
     public static final String TYPE = "QueryPlanningTool";
@@ -51,6 +53,9 @@ public class QueryPlanningTool implements WithModelTool {
     private static final String USER_SEARCH_TEMPLATES_TYPE_FIELD = "user_templates";
     private static final String SEARCH_TEMPLATES_FIELD = "search_templates";
     public static final String TEMPLATE_FIELD = "template";
+    public static final String QUERY_TEXT_FIELD = "query_text";
+    public static final String INPUT_SCHEMA_FIELD = "input_schema";
+    public static final String STRICT_FIELD = "strict";
     private static final String DEFAULT_SYSTEM_PROMPT =
         "You are an OpenSearch Query DSL generation assistant, translating natural language questions to OpenSeach DSL Queries";
     @Getter
@@ -63,7 +68,22 @@ public class QueryPlanningTool implements WithModelTool {
     @Getter
     @Setter
     private Map<String, Object> attributes;
-    static String DEFAULT_DESCRIPTION = "Use this tool to generate opensearch query dsl for a given natural language question.";
+    static String DEFAULT_DESCRIPTION = "Use this tool to generate OpenSearch Query DSL from natural language queries. "
+        + "Provide a 'query_text' parameter containing the complete natural language query with all necessary context, requirements, filters, and constraints. "
+        + "The query_text should be self-contained with all information needed to generate the OpenSearch DSL. "
+        + "Optionally provide 'index_mapping' to help generate more accurate queries based on the index structure. "
+        + "The tool will return a valid OpenSearch query that can be used to search your data.";
+
+    public static final String DEFAULT_INPUT_SCHEMA = "{\"type\":\"object\","
+        + "\"properties\":{"
+        + "\"query_text\":{\"type\":\"string\",\"description\":\"Complete natural language query with all necessary context to generate OpenSearch DSL. Include the question, any specific requirements, filters, or constraints. Examples: 'Find all products with price greater than 100 dollars', 'Show me documents about machine learning published in 2023', 'Search for users with status active and age between 25 and 35'\"},"
+        + "\"index_mapping\":{\"type\":\"string\",\"description\":\"Mandatory index mapping escaped string to help generate more accurate queries. Should be an escaped string containing the field mappings for the target index. Do not provide quotes if possibl;e to not break the formatting\"}"
+        + "},"
+        + "\"required\":[\"query_text\"],"
+        + "\"additionalProperties\":false}";
+
+    public static final Map<String, Object> DEFAULT_ATTRIBUTES = Map.of(TOOL_INPUT_SCHEMA_FIELD, DEFAULT_INPUT_SCHEMA, STRICT_FIELD, false);
+
     @Getter
     @Setter
     private String description = DEFAULT_DESCRIPTION;
@@ -78,6 +98,7 @@ public class QueryPlanningTool implements WithModelTool {
         this.queryGenerationTool = queryGenerationTool;
         this.client = client;
         this.searchTemplates = searchTemplates;
+        this.attributes = new HashMap<>(DEFAULT_ATTRIBUTES);
     }
 
     @Override
@@ -135,20 +156,41 @@ public class QueryPlanningTool implements WithModelTool {
         if (!parameters.containsKey(USER_PROMPT_FIELD)) {
             parameters.put(USER_PROMPT_FIELD, DEFAULT_USER_PROMPT);
         }
+        
+        // Handle query_text parameter - this is the main input from agents
+        // query_text should contain the complete natural language query with all context
+        if (parameters.containsKey(QUERY_TEXT_FIELD)) {
+            // query_text is already in the correct format for the prompt template
+            // No additional processing needed as it's used directly in PROMPT_SUFFIX
+            // The LLM should provide all necessary context in this single parameter
+        }
+
+
+        // index_mapping -> QPT
+        // index_mapping -> Agent -> QPT
+        
+        // Handle index_mapping parameter
+        log.info("ikkada 1 index mapping: {}", parameters.get(INDEX_MAPPING_FIELD));
         if (parameters.containsKey(INDEX_MAPPING_FIELD)) {
             parameters.put(INDEX_MAPPING_FIELD, gson.toJson(parameters.get(INDEX_MAPPING_FIELD)));
         }
+        log.info("ikkada index mapping: {}", parameters.get(INDEX_MAPPING_FIELD));
+        parameters.put("index_map", parameters.get(INDEX_MAPPING_FIELD));
+        log.info("ikkada 3 imap: {}", parameters.get("index_map"));
         if (parameters.containsKey(QUERY_FIELDS_FIELD)) {
             parameters.put(QUERY_FIELDS_FIELD, gson.toJson(parameters.get(QUERY_FIELDS_FIELD)));
         }
+        log.info("params are: " + parameters);
         ActionListener<T> modelListener = ActionListener.wrap(r -> {
             try {
                 String queryString = (String) r;
                 if (queryString == null || queryString.isBlank() || queryString.equals("null")) {
                     StringSubstitutor substitutor = new StringSubstitutor(parameters, "${parameters.", "}");
                     String defaultQueryString = substitutor.replace(DEFAULT_QUERY);
+                    log.info("The qpt fucked response is: " + queryString);
                     listener.onResponse((T) defaultQueryString);
                 } else {
+                    log.info("The qpt response is: " + queryString);
                     listener.onResponse((T) queryString);
                 }
             } catch (Exception e) {
@@ -174,7 +216,12 @@ public class QueryPlanningTool implements WithModelTool {
 
     @Override
     public boolean validate(Map<String, String> parameters) {
-        if (parameters == null || parameters.size() == 0) {
+        if (parameters == null || parameters.isEmpty()) {
+            return false;
+        }
+        // Check for required query_text parameter
+        String queryText = parameters.get(QUERY_TEXT_FIELD);
+        if (queryText == null || queryText.trim().isEmpty()) {
             return false;
         }
         return true;

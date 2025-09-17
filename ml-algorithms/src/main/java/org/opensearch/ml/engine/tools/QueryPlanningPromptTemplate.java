@@ -151,11 +151,10 @@ public class QueryPlanningPromptTemplate {
 
     public static final String PROMPT_SUFFIX = "==== INPUT ====\n"
         + "Question: ${parameters.query_text}\n"
-        + "Mapping: ${parameters.index_mapping:-}\n"
+        + "Mapping: ${parameters.index_map:-}\n"
         + "Query Fields: ${parameters.query_fields:-}\n\n"
         + "==== OUTPUT ====\n"
         + "GIVE THE OUTPUT PART ONLY IN YOUR RESPONSE (a single JSON object)\n"
-        + "Use this template provided by the user as reference to generate the query: ${parameters.template}\n\n"
         + "Output:";
 
     public static final String DEFAULT_USER_PROMPT = PROMPT_PREFIX
