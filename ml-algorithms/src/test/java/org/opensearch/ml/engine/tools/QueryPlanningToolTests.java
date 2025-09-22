@@ -11,6 +11,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -43,7 +44,12 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptResponse;
+import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.metadata.Metadata;
+import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.script.StoredScriptSource;
@@ -65,6 +71,18 @@ public class QueryPlanningToolTests {
     @Mock
     private MLFeatureEnabledSetting mlFeatureEnabledSetting;
 
+    @Mock
+    private ClusterService clusterService;
+
+    @Mock
+    private ClusterState clusterState;
+
+    @Mock
+    private Metadata metadata;
+
+    @Mock
+    private NamedXContentRegistry xContentRegistry;
+
     private Map<String, String> validParams;
     private Map<String, String> emptyParams;
 
@@ -80,7 +98,7 @@ public class QueryPlanningToolTests {
 
         // Initialize the factory with mocked dependencies
         factory = QueryPlanningTool.Factory.getInstance();
-        factory.init(client, mlFeatureEnabledSetting);
+        factory.init(client, mlFeatureEnabledSetting, clusterService, xContentRegistry);
 
         validParams = new HashMap<>();
         validParams.put(SYSTEM_PROMPT_FIELD, "test prompt");
@@ -104,16 +122,16 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
         validParams
             .put(
                 SYSTEM_PROMPT_FIELD,
-                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.query_text}"
+                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.question}"
             );
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
 
         assertEquals(matchQueryString, future.get());
@@ -150,16 +168,16 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
         validParams
             .put(
                 SYSTEM_PROMPT_FIELD,
-                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.query_text}"
+                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.question}"
             );
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         validParams.put("search_templates", "[{'template_id': 'template_id', 'template_description': 'test_description'}]");
         tool.run(validParams, listener);
 
@@ -177,16 +195,16 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
         validParams
             .put(
                 SYSTEM_PROMPT_FIELD,
-                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.query_text}"
+                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.question}"
             );
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
 
         assertEquals(matchQueryString, future.get());
@@ -212,16 +230,16 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
         validParams
             .put(
                 SYSTEM_PROMPT_FIELD,
-                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.query_text}"
+                "You are a query generation agent. Generate a dsl query for the following question: ${parameters.question}"
             );
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         validParams.put("search_templates", "[{'template_id': 'template_id', 'template_description': 'test_description'}]");
         tool.run(validParams, listener);
 
@@ -244,10 +262,10 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
 
         future.get();
@@ -261,10 +279,10 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
         String defaultQueryString = "{\"size\":10,\"query\":{\"match_all\":{}}}";
         assertEquals(defaultQueryString, future.get());
@@ -278,10 +296,10 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
         String defaultQueryString = "{\"size\":10,\"query\":{\"match_all\":{}}}";
         assertEquals(defaultQueryString, future.get());
@@ -295,10 +313,10 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
-        validParams.put("query_text", "help me find some books related to wind");
+        validParams.put("question", "help me find some books related to wind");
         tool.run(validParams, listener);
         String defaultQueryString = "{\"size\":10,\"query\":{\"match_all\":{}}}";
         assertEquals(defaultQueryString, future.get());
@@ -332,9 +350,9 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testRunWithNoPrompt() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         Map<String, String> parameters = new HashMap<>();
-        parameters.put("query_text", "some query");
+        parameters.put("question", "some query");
         @SuppressWarnings("unchecked")
         ActionListener<String> listener = mock(ActionListener.class);
 
@@ -350,7 +368,7 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testRunWithInvalidParameters() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         @SuppressWarnings("unchecked")
         ActionListener<String> listener = mock(ActionListener.class);
 
@@ -363,9 +381,9 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testRunModelReturnsNull() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         Map<String, String> parameters = new HashMap<>();
-        parameters.put("query_text", "some query");
+        parameters.put("question", "some query");
         @SuppressWarnings("unchecked")
         ActionListener<String> listener = mock(ActionListener.class);
 
@@ -384,7 +402,7 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testSetName() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         tool.setName("NewName");
         assertEquals("NewName", tool.getName());
     }
@@ -414,9 +432,9 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testAllParameterProcessing() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         Map<String, String> parameters = new HashMap<>();
-        parameters.put("query_text", "test query");
+        parameters.put("question", "test query");
         parameters.put(INDEX_MAPPING_FIELD, "{\"properties\":{\"title\":{\"type\":\"text\"}}}");
         parameters.put(QUERY_FIELDS_FIELD, "[\"title\", \"content\"]");
         // No system_prompt - should use default
@@ -438,7 +456,7 @@ public class QueryPlanningToolTests {
         Map<String, String> capturedParams = captor.getValue();
 
         // All parameters should be processed
-        assertTrue(capturedParams.containsKey("query_text"));
+        assertTrue(capturedParams.containsKey("question"));
         assertTrue(capturedParams.containsKey(INDEX_MAPPING_FIELD));
         assertTrue(capturedParams.containsKey(QUERY_FIELDS_FIELD));
         assertTrue(capturedParams.containsKey(SYSTEM_PROMPT_FIELD));
@@ -454,9 +472,9 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testAllParameterProcessing_WithUserSearchTemplates() {
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
         Map<String, String> parameters = new HashMap<>();
-        parameters.put("query_text", "test query");
+        parameters.put("question", "test query");
         parameters.put(INDEX_MAPPING_FIELD, "{\"properties\":{\"title\":{\"type\":\"text\"}}}");
         parameters.put(QUERY_FIELDS_FIELD, "[\"title\", \"content\"]");
         validParams.put("search_templates", "[{'template_id': 'template_id', 'template_description': 'test_description'}]");
@@ -500,7 +518,7 @@ public class QueryPlanningToolTests {
         Map<String, String> capturedParams = captor.getValue();
 
         // All parameters should be processed
-        assertTrue(capturedParams.containsKey("query_text"));
+        assertTrue(capturedParams.containsKey("question"));
         assertTrue(capturedParams.containsKey(INDEX_MAPPING_FIELD));
         assertTrue(capturedParams.containsKey(QUERY_FIELDS_FIELD));
         assertTrue(capturedParams.containsKey(SYSTEM_PROMPT_FIELD));
@@ -514,9 +532,9 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testUserPromptParameterProcessing() {
-        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client);
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
         Map<String, String> parameters = new HashMap<>();
-        parameters.put("query_text", "test query");
+        parameters.put("question", "test query");
         parameters.put(USER_PROMPT_FIELD, "custom user prompt");
         // No system_prompt or user_prompt - should use defaults
 
@@ -551,5 +569,33 @@ public class QueryPlanningToolTests {
 
         Exception exception = assertThrows(OpenSearchException.class, () -> factory.create(map));
         assertEquals(ML_COMMONS_AGENTIC_SEARCH_DISABLED_MESSAGE, exception.getMessage());
+    }
+
+    @Test
+    public void testRunWithNonExistentIndex() throws ExecutionException, InterruptedException {
+        // Mock cluster service chain to return null for non-existent index
+        when(clusterService.state()).thenReturn(clusterState);
+        when(clusterState.metadata()).thenReturn(metadata);
+        when(metadata.index("non_existent_index")).thenReturn(null);
+
+        QueryPlanningTool tool = new QueryPlanningTool("llmGenerated", queryGenerationTool, client, null, clusterService, xContentRegistry);
+        final CompletableFuture<String> future = new CompletableFuture<>();
+        ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
+        
+        Map<String, String> parameters = new HashMap<>();
+        parameters.put("question", "help me find some books related to wind");
+        parameters.put("index_name", "non_existent_index");
+        
+        tool.run(parameters, listener);
+
+        // Should fail with IllegalStateException due to non-existent index
+        assertTrue(future.isCompletedExceptionally());
+        try {
+            future.get();
+            fail("Expected ExecutionException to be thrown");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof IllegalStateException);
+            assertTrue(e.getCause().getMessage().contains("Index 'non_existent_index' does not exist or is not available"));
+        }
     }
 }

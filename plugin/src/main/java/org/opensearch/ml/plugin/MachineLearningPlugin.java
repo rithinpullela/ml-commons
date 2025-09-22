@@ -771,7 +771,7 @@ public class MachineLearningPlugin extends Plugin
         SearchIndexTool.Factory.getInstance().init(client, xContentRegistry);
         VisualizationsTool.Factory.getInstance().init(client);
         ConnectorTool.Factory.getInstance().init(client);
-        QueryPlanningTool.Factory.getInstance().init(client, mlFeatureEnabledSetting);
+        QueryPlanningTool.Factory.getInstance().init(client, mlFeatureEnabledSetting, clusterService, xContentRegistry);
 
         toolFactories.put(MLModelTool.TYPE, MLModelTool.Factory.getInstance());
         toolFactories.put(IndexInsightTool.TYPE, IndexInsightTool.Factory.getInstance());
