@@ -187,9 +187,9 @@ public class QueryPlanningPromptTemplate {
         + "Mapping: { \"properties\": { \"price\": {\"type\":\"float\"}, \"brand\": {\"type\":\"keyword\"}, \"title\": {\"type\":\"text\"}, \"description\": {\"type\":\"semantic\", \"model_id\":\"m-sem-123\"} } }\n"
         + "Output: { \"size\": 10, \"query\": { \"bool\": { \"must\": [ { \"neural\": { \"description\": { \"query_text\": \"wireless noise cancelling headphones with multipoint\", \"k\": 120 } } } ], \"filter\": [ { \"range\": { \"price\": { \"lte\": 200 } } }, { \"term\": { \"brand\": \"Sony\" } } ] } } }\n";
     public static final String EXAMPLE_15 = "Example 15 — Don't us Neural Search when model ID is not available\n"
-            + "Input: Find articles about \"LLM hallucinations\". Model Id is: not provided\n"
-            + "Mapping: { \"properties\": { \"content\": {\"type\":\"text\"}, \"content_vector\": {\"type\":\"knn_vector\",\"dimension\":768}, \"tags\": {\"type\":\"keyword\"}, \"published_at\": {\"type\":\"date\"} } }\n"
-            + "Output: {\"size\":10,\"query\":{\"match\":{\"content\":{\"query\":\"LLM hallucinations\",\"operator\":\"and\"}}}}\n";
+        + "Input: Find articles about \"LLM hallucinations\". Model Id is: not provided\n"
+        + "Mapping: { \"properties\": { \"content\": {\"type\":\"text\"}, \"content_vector\": {\"type\":\"knn_vector\",\"dimension\":768}, \"tags\": {\"type\":\"keyword\"}, \"published_at\": {\"type\":\"date\"} } }\n"
+        + "Output: {\"size\":10,\"query\":{\"match\":{\"content\":{\"query\":\"LLM hallucinations\",\"operator\":\"and\"}}}}\n";
 
     public static final String EXAMPLES = "==== EXAMPLES ====\n"
         + EXAMPLE_1
