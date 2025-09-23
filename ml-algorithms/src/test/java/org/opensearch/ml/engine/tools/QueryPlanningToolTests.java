@@ -45,7 +45,6 @@ import org.mockito.MockitoAnnotations;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptResponse;
 import org.opensearch.cluster.ClusterState;
-import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.core.action.ActionListener;
@@ -168,7 +167,14 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
+        QueryPlanningTool tool = new QueryPlanningTool(
+            "user_templates",
+            queryGenerationTool,
+            client,
+            null,
+            clusterService,
+            xContentRegistry
+        );
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
@@ -230,7 +236,14 @@ public class QueryPlanningToolTests {
             return null;
         }).when(queryGenerationTool).run(any(), any());
 
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
+        QueryPlanningTool tool = new QueryPlanningTool(
+            "user_templates",
+            queryGenerationTool,
+            client,
+            null,
+            clusterService,
+            xContentRegistry
+        );
         final CompletableFuture<String> future = new CompletableFuture<>();
         ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
         // test try to update the prompt
@@ -472,7 +485,14 @@ public class QueryPlanningToolTests {
 
     @Test
     public void testAllParameterProcessing_WithUserSearchTemplates() {
-        QueryPlanningTool tool = new QueryPlanningTool("user_templates", queryGenerationTool, client, null, clusterService, xContentRegistry);
+        QueryPlanningTool tool = new QueryPlanningTool(
+            "user_templates",
+            queryGenerationTool,
+            client,
+            null,
+            clusterService,
+            xContentRegistry
+        );
         Map<String, String> parameters = new HashMap<>();
         parameters.put("question", "test query");
         parameters.put(INDEX_MAPPING_FIELD, "{\"properties\":{\"title\":{\"type\":\"text\"}}}");

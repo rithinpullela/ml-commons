@@ -16,7 +16,6 @@ import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT_SEARCH_TEMPLATE;
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.TEMPLATE_SELECTION_SYSTEM_PROMPT;
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.TEMPLATE_SELECTION_USER_PROMPT;
-import org.opensearch.action.search.SearchRequest;
 
 import java.io.IOException;
 import java.util.*;
@@ -24,6 +23,7 @@ import java.util.*;
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptRequest;
+import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.service.ClusterService;
@@ -84,18 +84,19 @@ public class QueryPlanningTool implements WithModelTool {
     @Getter
     @Setter
     private Map<String, Object> attributes;
-    static String DEFAULT_DESCRIPTION = "Use this tool to generate OpenSearch Query DSL from natural language queries. "
-        + "Provide a 'question' parameter containing the complete natural language query with all necessary context, requirements, filters, and constraints. "
-        + "The question should be self-contained with all information needed to generate the OpenSearch DSL. "
-        + "Provide 'index_name' to help generate more accurate queries based on the index structure. "
+    static String DEFAULT_DESCRIPTION = "Use this tool to generate OpenSearch Query DSL from natural language queries.\n"
+        + "Provide a 'question' parameter containing the complete natural language query with all necessary context, requirements, filters, and constraints.\n"
+        + "The question should be self-contained with all information needed to generate the OpenSearch DSL.\n"
+        + "Provide 'index_name' to help generate more accurate queries based on the index structure.\n"
+        + "Optinally provide model ID to be potentially used for neural search \n"
         + "The tool will return a valid OpenSearch query that can be used to search your data.";
 
     public static final String DEFAULT_INPUT_SCHEMA = "{"
         + "\"type\":\"object\","
         + "\"properties\":{"
         + "\"question\":{\"type\":\"string\",\"description\":\"Complete natural language query with all necessary context to generate OpenSearch DSL. Include the question, any specific requirements, filters, or constraints. Examples: 'Find all products with price greater than 100 dollars', 'Show me documents about machine learning published in 2023', 'Search for users with status active and age between 25 and 35'\"},"
-        + "\"index_name\":{\"type\":\"string\",\"description\":\"the name of the index against which the query needs to be generated.\"}" +
-            ""
+        + "\"index_name\":{\"type\":\"string\",\"description\":\"the name of the index against which the query needs to be generated.\"}"
+        + "\"neural_model_id\":{\"type\":\"string\",\"description\":\"the model id to perform neural search.\"}"
         + "},"
         + "\"required\":[\"question\", \"index_name\"],"
         + "\"additionalProperties\":false"
@@ -193,10 +194,10 @@ public class QueryPlanningTool implements WithModelTool {
             parameters.put(INDEX_MAPPING_FIELD, gson.toJson(indexMapping));
 
             String sampleDoc = getSampleDoc(parameters.get(INDEX_NAME_FIELD));
-            parameters.put(SAMPLE_DOCUMENT_FIELD,  gson.toJson(sampleDoc));
+            parameters.put(SAMPLE_DOCUMENT_FIELD, gson.toJson(sampleDoc));
 
             String currentDateTime = getCurrentDateTime("");
-            parameters.put(CURRENT_TIME_FIELD,  gson.toJson(currentDateTime));
+            parameters.put(CURRENT_TIME_FIELD, gson.toJson(currentDateTime));
 
             if (parameters.containsKey(QUERY_FIELDS_FIELD)) {
                 parameters.put(QUERY_FIELDS_FIELD, gson.toJson(parameters.get(QUERY_FIELDS_FIELD)));
@@ -236,7 +237,7 @@ public class QueryPlanningTool implements WithModelTool {
 
         try {
             SearchResponse searchResponse;
-            
+
             // Execute the search request based on index type
             if (Objects.equals(indexName, ML_CONNECTOR_INDEX)) {
                 searchResponse = client.execute(MLConnectorSearchAction.INSTANCE, searchRequest).actionGet();
@@ -256,7 +257,7 @@ public class QueryPlanningTool implements WithModelTool {
                     return gson.toJson(sourceMap);
                 }
             }
-            
+
             // No hits found, return empty string
             return "";
         } catch (Exception e) {
@@ -320,7 +321,12 @@ public class QueryPlanningTool implements WithModelTool {
             }
         }
 
-        public void init(Client client, MLFeatureEnabledSetting mlFeatureEnabledSetting, ClusterService clusterService, NamedXContentRegistry xContentRegistry) {
+        public void init(
+            Client client,
+            MLFeatureEnabledSetting mlFeatureEnabledSetting,
+            ClusterService clusterService,
+            NamedXContentRegistry xContentRegistry
+        ) {
             this.client = client;
             this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
             this.clusterService = clusterService;
