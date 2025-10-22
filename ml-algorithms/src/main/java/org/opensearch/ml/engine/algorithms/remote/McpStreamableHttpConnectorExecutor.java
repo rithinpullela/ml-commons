@@ -42,6 +42,7 @@ import org.opensearch.ml.engine.algorithms.remote.streaming.StreamPredictActionL
 import org.opensearch.ml.engine.annotation.ConnectorExecutor;
 import org.opensearch.ml.engine.tools.McpStreamableHttpTool;
 import org.opensearch.script.ScriptService;
+import org.opensearch.secure_sm.AccessController;
 import org.opensearch.transport.client.Client;
 
 import com.google.gson.Gson;
@@ -102,9 +103,10 @@ public class McpStreamableHttpConnectorExecutor extends AbstractConnectorExecuto
                 .requestTimeout(readTimeout)
                 .capabilities(McpSchema.ClientCapabilities.builder().roots(false).build())
                 .build();
-
-            client.initialize();
-            McpSchema.ListToolsResult tools = client.listTools();
+            McpSchema.ListToolsResult tools = AccessController.doPrivileged(() -> {
+                client.initialize();
+                return client.listTools();
+            });
 
             // Process the results
             Gson gson = new Gson();
