@@ -153,6 +153,10 @@ public class MLIndicesHandler {
         initMLIndexIfAbsent(MLIndex.MEMORY_CONTAINER, listener);
     }
 
+    public void initMLCustomToolsIndex(ActionListener<Boolean> listener) {
+        initMLIndexIfAbsent(MLIndex.CUSTOM_TOOLS, listener);
+    }
+
     public void initMLIndexIfAbsent(MLIndex index, ActionListener<Boolean> listener) {
         String indexName = index.getIndexName();
         String mapping = index.getMapping();

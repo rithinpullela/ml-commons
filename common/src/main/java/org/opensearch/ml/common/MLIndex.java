@@ -7,6 +7,8 @@ package org.opensearch.ml.common;
 
 import static org.opensearch.ml.common.CommonValue.MCP_SESSION_MANAGEMENT_INDEX;
 import static org.opensearch.ml.common.CommonValue.MCP_TOOLS_INDEX;
+import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX;
+import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_AGENT_INDEX;
 import static org.opensearch.ml.common.CommonValue.ML_AGENT_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_CONFIG_INDEX;
@@ -54,6 +56,7 @@ public enum MLIndex {
     MEMORY_CONTAINER(ML_MEMORY_CONTAINER_INDEX, false, ML_MEMORY_CONTAINER_INDEX_MAPPING_PATH),
     MCP_SESSION_MANAGEMENT(MCP_SESSION_MANAGEMENT_INDEX, false, ML_MCP_SESSION_MANAGEMENT_INDEX_MAPPING_PATH),
     MCP_TOOLS(MCP_TOOLS_INDEX, false, ML_MCP_TOOLS_INDEX_MAPPING_PATH),
+    CUSTOM_TOOLS(ML_CUSTOM_TOOLS_INDEX, false, ML_CUSTOM_TOOLS_INDEX_MAPPING_PATH),
     JOBS(ML_JOBS_INDEX, false, ML_JOBS_INDEX_MAPPING_PATH),
     INDEX_INSIGHT_CONFIG(ML_INDEX_INSIGHT_CONFIG_INDEX, false, ML_INDEX_INSIGHT_CONFIG_INDEX_MAPPING_PATH),
     INDEX_INSIGHT_STORAGE(ML_INDEX_INSIGHT_STORAGE_INDEX, false, ML_INDEX_INSIGHT_STORAGE_INDEX_MAPPING_PATH);

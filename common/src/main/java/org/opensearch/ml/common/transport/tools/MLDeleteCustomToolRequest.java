@@ -1,0 +1,71 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package org.opensearch.ml.common.transport.tools;
+
+import static org.opensearch.action.ValidateActions.addValidationError;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+
+import org.opensearch.action.ActionRequest;
+import org.opensearch.action.ActionRequestValidationException;
+import org.opensearch.core.common.io.stream.InputStreamStreamInput;
+import org.opensearch.core.common.io.stream.OutputStreamStreamOutput;
+import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.core.common.io.stream.StreamOutput;
+
+import lombok.Builder;
+import lombok.Getter;
+
+@Getter
+public class MLDeleteCustomToolRequest extends ActionRequest {
+    private String toolId;
+    private String tenantId;
+
+    @Builder
+    public MLDeleteCustomToolRequest(String toolId, String tenantId) {
+        this.toolId = toolId;
+        this.tenantId = tenantId;
+    }
+
+    public MLDeleteCustomToolRequest(StreamInput in) throws IOException {
+        super(in);
+        this.toolId = in.readString();
+        this.tenantId = in.readOptionalString();
+    }
+
+    @Override
+    public ActionRequestValidationException validate() {
+        if (toolId == null) {
+            return addValidationError("Custom tool ID can't be null", null);
+        }
+        return null;
+    }
+
+    @Override
+    public void writeTo(StreamOutput out) throws IOException {
+        super.writeTo(out);
+        out.writeString(toolId);
+        out.writeOptionalString(tenantId);
+    }
+
+    public static MLDeleteCustomToolRequest fromActionRequest(ActionRequest actionRequest) {
+        if (actionRequest instanceof MLDeleteCustomToolRequest) {
+            return (MLDeleteCustomToolRequest) actionRequest;
+        }
+
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(); OutputStreamStreamOutput osso = new OutputStreamStreamOutput(baos)) {
+            actionRequest.writeTo(osso);
+            try (StreamInput input = new InputStreamStreamInput(new ByteArrayInputStream(baos.toByteArray()))) {
+                return new MLDeleteCustomToolRequest(input);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to parse ActionRequest into MLDeleteCustomToolRequest", e);
+        }
+    }
+}

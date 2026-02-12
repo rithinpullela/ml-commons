@@ -96,6 +96,10 @@ import org.opensearch.ml.action.forward.TransportForwardAction;
 import org.opensearch.ml.action.handler.MLSearchHandler;
 import org.opensearch.ml.action.mcpserver.McpStatelessServerHolder;
 import org.opensearch.ml.action.mcpserver.McpToolsHelper;
+import org.opensearch.ml.action.tools.CreateCustomToolTransportAction;
+import org.opensearch.ml.action.tools.CustomToolsHelper;
+import org.opensearch.ml.action.tools.DeleteCustomToolTransportAction;
+import org.opensearch.ml.action.tools.UpdateCustomToolTransportAction;
 import org.opensearch.ml.action.mcpserver.TransportMcpServerAction;
 import org.opensearch.ml.action.mcpserver.TransportMcpToolsListAction;
 import org.opensearch.ml.action.mcpserver.TransportMcpToolsRegisterAction;
@@ -240,8 +244,11 @@ import org.opensearch.ml.common.transport.task.MLCancelBatchJobAction;
 import org.opensearch.ml.common.transport.task.MLTaskDeleteAction;
 import org.opensearch.ml.common.transport.task.MLTaskGetAction;
 import org.opensearch.ml.common.transport.task.MLTaskSearchAction;
+import org.opensearch.ml.common.transport.tools.MLCreateCustomToolAction;
+import org.opensearch.ml.common.transport.tools.MLDeleteCustomToolAction;
 import org.opensearch.ml.common.transport.tools.MLGetToolAction;
 import org.opensearch.ml.common.transport.tools.MLListToolsAction;
+import org.opensearch.ml.common.transport.tools.MLUpdateCustomToolAction;
 import org.opensearch.ml.common.transport.training.MLTrainingTaskAction;
 import org.opensearch.ml.common.transport.trainpredict.MLTrainAndPredictionTaskAction;
 import org.opensearch.ml.common.transport.undeploy.MLUndeployModelAction;
@@ -282,6 +289,7 @@ import org.opensearch.ml.engine.tools.McpStreamableHttpTool;
 import org.opensearch.ml.engine.tools.QueryPlanningTool;
 import org.opensearch.ml.engine.tools.ReadFromScratchPadTool;
 import org.opensearch.ml.engine.tools.SearchIndexTool;
+import org.opensearch.ml.engine.tools.SearchTemplateTool;
 import org.opensearch.ml.engine.tools.VisualizationsTool;
 import org.opensearch.ml.engine.tools.WriteToScratchPadTool;
 import org.opensearch.ml.engine.utils.AgentModelsSearcher;
@@ -324,6 +332,9 @@ import org.opensearch.ml.processor.MLInferenceSearchResponseProcessor;
 import org.opensearch.ml.rest.RestMLAddMemoriesAction;
 import org.opensearch.ml.rest.RestMLCancelBatchJobAction;
 import org.opensearch.ml.rest.RestMLCreateConnectorAction;
+import org.opensearch.ml.rest.RestMLCreateCustomToolAction;
+import org.opensearch.ml.rest.RestMLDeleteCustomToolAction;
+import org.opensearch.ml.rest.RestMLUpdateCustomToolAction;
 import org.opensearch.ml.rest.RestMLCreateContextManagementTemplateAction;
 import org.opensearch.ml.rest.RestMLCreateControllerAction;
 import org.opensearch.ml.rest.RestMLCreateMemoryContainerAction;
@@ -528,6 +539,7 @@ public class MachineLearningPlugin extends Plugin
     private ScriptService scriptService;
     private Encryptor encryptor;
     private McpToolsHelper mcpToolsHelper;
+    private CustomToolsHelper customToolsHelper;
     private McpStatelessServerHolder statelessServerHolder;
 
     public MachineLearningPlugin() {}
@@ -627,7 +639,10 @@ public class MachineLearningPlugin extends Plugin
                 new ActionHandler<>(MLUpdateContextManagementTemplateAction.INSTANCE, UpdateContextManagementTemplateTransportAction.class),
                 new ActionHandler<>(MLGetContextManagementTemplateAction.INSTANCE, GetContextManagementTemplateTransportAction.class),
                 new ActionHandler<>(MLListContextManagementTemplatesAction.INSTANCE, ListContextManagementTemplatesTransportAction.class),
-                new ActionHandler<>(MLDeleteContextManagementTemplateAction.INSTANCE, DeleteContextManagementTemplateTransportAction.class)
+                new ActionHandler<>(MLDeleteContextManagementTemplateAction.INSTANCE, DeleteContextManagementTemplateTransportAction.class),
+                new ActionHandler<>(MLCreateCustomToolAction.INSTANCE, CreateCustomToolTransportAction.class),
+                new ActionHandler<>(MLUpdateCustomToolAction.INSTANCE, UpdateCustomToolTransportAction.class),
+                new ActionHandler<>(MLDeleteCustomToolAction.INSTANCE, DeleteCustomToolTransportAction.class)
             );
     }
 
@@ -839,6 +854,7 @@ public class MachineLearningPlugin extends Plugin
         VisualizationsTool.Factory.getInstance().init(client);
         ConnectorTool.Factory.getInstance().init(client);
         QueryPlanningTool.Factory.getInstance().init(client);
+        SearchTemplateTool.Factory.getInstance().init(client, scriptService, xContentRegistry);
         WriteToScratchPadTool.Factory.getInstance().init();
         ReadFromScratchPadTool.Factory.getInstance().init();
 
@@ -855,6 +871,7 @@ public class MachineLearningPlugin extends Plugin
         toolFactories.put(QueryPlanningTool.TYPE, QueryPlanningTool.Factory.getInstance());
         toolFactories.put(WriteToScratchPadTool.TYPE, WriteToScratchPadTool.Factory.getInstance());
         toolFactories.put(ReadFromScratchPadTool.TYPE, ReadFromScratchPadTool.Factory.getInstance());
+        toolFactories.put(SearchTemplateTool.TYPE, SearchTemplateTool.Factory.getInstance());
         if (externalToolFactories != null) {
             toolFactories.putAll(externalToolFactories);
         }
@@ -946,6 +963,7 @@ public class MachineLearningPlugin extends Plugin
         }
 
         mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper);
+        customToolsHelper = new CustomToolsHelper(client, clusterService, mlFeatureEnabledSetting);
         statelessServerHolder = new McpStatelessServerHolder(mcpToolsHelper, client, threadPool);
 
         return ImmutableList
@@ -979,6 +997,7 @@ public class MachineLearningPlugin extends Plugin
                 sdkClient,
                 toolFactoryWrapper,
                 mcpToolsHelper,
+                customToolsHelper,
                 statelessServerHolder
             );
     }
@@ -1093,6 +1112,9 @@ public class MachineLearningPlugin extends Plugin
         RestMLSearchAgentAction restMLSearchAgentAction = new RestMLSearchAgentAction(mlFeatureEnabledSetting);
         RestMLListToolsAction restMLListToolsAction = new RestMLListToolsAction(toolFactories);
         RestMLGetToolAction restMLGetToolAction = new RestMLGetToolAction(toolFactories);
+        RestMLCreateCustomToolAction restMLCreateCustomToolAction = new RestMLCreateCustomToolAction(mlFeatureEnabledSetting);
+        RestMLUpdateCustomToolAction restMLUpdateCustomToolAction = new RestMLUpdateCustomToolAction(mlFeatureEnabledSetting);
+        RestMLDeleteCustomToolAction restMLDeleteCustomToolAction = new RestMLDeleteCustomToolAction(mlFeatureEnabledSetting);
         RestMLGetConfigAction restMLGetConfigAction = new RestMLGetConfigAction(mlFeatureEnabledSetting);
         RestMLCancelBatchJobAction restMLCancelBatchJobAction = new RestMLCancelBatchJobAction();
         RestMcpServerAction restMcpServerAction = new RestMcpServerAction(mlFeatureEnabledSetting);
@@ -1196,7 +1218,10 @@ public class MachineLearningPlugin extends Plugin
                 restMLUpdateContextManagementTemplateAction,
                 restMLGetContextManagementTemplateAction,
                 restMLListContextManagementTemplatesAction,
-                restMLDeleteContextManagementTemplateAction
+                restMLDeleteContextManagementTemplateAction,
+                restMLCreateCustomToolAction,
+                restMLUpdateCustomToolAction,
+                restMLDeleteCustomToolAction
             );
     }
 
