@@ -110,12 +110,63 @@ public class StreamingWrapper {
         boolean verbose,
         List<ModelTensors> cotModelTensors,
         Map<String, Object> additionalInfo,
-        String finalAnswer
+        String finalAnswer,
+        AgentTokenTracker tokenTracker,
+        String tenantId
     ) {
         if (isStreaming) {
+            // Send token usage BEFORE completion chunk in streaming mode
+            if (verbose && tokenTracker != null && tokenTracker.hasUsage()) {
+                try {
+                    Map<String, Object> tokenUsageMap = tokenTracker.toOutputMap();
+                    List<ModelTensor> tokenTensors = new ArrayList<>();
+
+                    // Add memory_id and parent_interaction_id
+                    if (sessionId != null) {
+                        tokenTensors.add(ModelTensor.builder().name("memory_id").result(sessionId).build());
+                    }
+                    if (parentInteractionId != null) {
+                        tokenTensors.add(ModelTensor.builder().name("parent_interaction_id").result(parentInteractionId).build());
+                    }
+
+                    // Add token usage tensor
+                    tokenTensors.add(
+                        ModelTensor.builder()
+                            .name("token_usage")
+                            .dataAsMap(tokenUsageMap)
+                            .build()
+                    );
+
+                    ModelTensorOutput tokenOutput = ModelTensorOutput.builder()
+                        .mlModelOutputs(List.of(ModelTensors.builder().mlModelTensors(tokenTensors).build()))
+                        .build();
+
+                    channel.sendResponseBatch(new MLTaskResponse(tokenOutput));
+
+                    // Log structured token usage for each model (same as non-streaming mode)
+                    List<Map<String, Object>> perModelUsage = (List<Map<String, Object>>) tokenUsageMap.get("per_model_usage");
+                    if (perModelUsage != null) {
+                        long eventTime = System.currentTimeMillis();
+                        for (Map<String, Object> modelUsage : perModelUsage) {
+                            Map<String, Object> logEntry = new java.util.LinkedHashMap<>();
+                            logEntry.put("tenantId", tenantId);
+                            logEntry.put("tokenDetails", modelUsage);
+                            logEntry.put("eventTime", eventTime);
+
+                            log.info("{}", StringUtils.toJson(logEntry));
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to send token usage in streaming response", e);
+                }
+            }
+
+            // Send final completion chunk with is_last=true
+            sendCompletionChunk(sessionId, parentInteractionId);
+
             listener.onResponse("Streaming completed");
         } else {
-            returnFinalResponse(sessionId, listener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer);
+            returnFinalResponse(sessionId, listener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer, tokenTracker, tenantId);
         }
     }
 

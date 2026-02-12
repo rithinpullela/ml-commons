@@ -187,7 +187,7 @@ public class StreamingWrapperTest {
 
     @Test
     public void testSendFinalResponseStreaming() {
-        streamingWrapper.sendFinalResponse("session1", listener, "parent1", true, null, null, "answer");
+        streamingWrapper.sendFinalResponse("session1", listener, "parent1", true, null, null, "answer", null, "tenant1");
 
         verify(listener).onResponse("Streaming completed");
     }
