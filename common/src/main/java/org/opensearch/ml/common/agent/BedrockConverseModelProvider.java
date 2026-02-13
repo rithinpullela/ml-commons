@@ -5,6 +5,7 @@
 
 package org.opensearch.ml.common.agent;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,15 @@ import org.apache.commons.text.StringEscapeUtils;
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.ml.common.FunctionName;
 import org.opensearch.ml.common.MLAgentType;
+import org.opensearch.ml.common.agent.v2.AssistantTurn;
+import org.opensearch.ml.common.agent.v2.InteractionTurn;
+import org.opensearch.ml.common.agent.v2.LLMRequest;
+import org.opensearch.ml.common.agent.v2.LLMResponse;
+import org.opensearch.ml.common.agent.v2.StopReason;
+import org.opensearch.ml.common.agent.v2.ToolCallRequest;
+import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolResultTurn;
+import org.opensearch.ml.common.agent.v2.ToolSpec;
 import org.opensearch.ml.common.connector.AwsConnector;
 import org.opensearch.ml.common.connector.Connector;
 import org.opensearch.ml.common.connector.ConnectorAction;
@@ -29,8 +39,15 @@ import org.opensearch.ml.common.input.execute.agent.SourceType;
 import org.opensearch.ml.common.input.execute.agent.ToolCall;
 import org.opensearch.ml.common.input.execute.agent.VideoContent;
 import org.opensearch.ml.common.model.ModelProvider;
+import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.transport.register.MLRegisterModelInput;
+import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.common.utils.ToolUtils;
+
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.PathNotFoundException;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Model provider for Bedrock Converse API.
@@ -52,6 +69,7 @@ import org.opensearch.ml.common.utils.ToolUtils;
  * All parameters consistently use the ${parameters.} prefix for uniformity.
  */
 // todo: refactor the processing so providers have to only provide the constants
+@Log4j2
 public class BedrockConverseModelProvider extends ModelProvider {
 
     private static final String DEFAULT_REGION = "us-east-1";
@@ -373,6 +391,149 @@ public class BedrockConverseModelProvider extends ModelProvider {
             "{\"toolResult\":{\"toolUseId\":\"${parameters.tool_call_id}\",\"content\":[{\"text\":\"${parameters.content_text}\"}]}}";
         StringSubstitutor substitutor = new StringSubstitutor(params, "${parameters.", "}");
         return substitutor.replace(template);
+    }
+
+    // ========== V2 Agent Methods ==========
+
+    private static final String BEDROCK_V2_TOOL_TEMPLATE =
+        "{\"toolSpec\":{\"name\":\"%s\",\"description\":\"%s\",\"inputSchema\":{\"json\":%s}}}";
+
+    @Override
+    public void buildRequestParams(LLMRequest request, Map<String, String> params) {
+        // 1. System prompt
+        if (request.getSystemPrompt() != null) {
+            params.put("system_prompt", request.getSystemPrompt());
+        }
+
+        // 2. User message body
+        if (request.getCurrentInput() != null) {
+            String escapedInput = StringEscapeUtils.escapeJson(request.getCurrentInput());
+            params.put("body", "{\"role\":\"user\",\"content\":[{\"text\":\"" + escapedInput + "\"}]}");
+        }
+
+        // 3. Tool specs
+        if (request.getToolSpecs() != null && !request.getToolSpecs().isEmpty()) {
+            List<String> toolJsons = new ArrayList<>();
+            for (ToolSpec tool : request.getToolSpecs()) {
+                String schemaJson = tool.getInputSchema() != null ? StringUtils.toJson(tool.getInputSchema()) : "{}";
+                String escapedDesc = StringEscapeUtils.escapeJson(tool.getDescription() != null ? tool.getDescription() : "");
+                toolJsons.add(String.format(BEDROCK_V2_TOOL_TEMPLATE, tool.getName(), escapedDesc, schemaJson));
+            }
+            params.put("_tools", String.join(",", toolJsons));
+            params.put("tool_configs", ", \"toolConfig\": {\"tools\": [${parameters._tools:-}]}");
+        }
+
+        // 4. Interactions (assistant turns + tool results)
+        if (request.getInteractions() != null && !request.getInteractions().isEmpty()) {
+            String interactionsJson = formatV2Interactions(request.getInteractions());
+            if (!interactionsJson.isEmpty()) {
+                params.put("_interactions", ", " + interactionsJson);
+            }
+        }
+
+        // 5. No-escape params
+        params.put("no_escape_params", "_chat_history,_tools,_interactions,tool_configs,body");
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public LLMResponse parseResponse(ModelTensorOutput output) {
+        Map<String, ?> dataAsMap = output.getMlModelOutputs().get(0).getMlModelTensors().get(0).getDataAsMap();
+
+        // Extract text content
+        String text = null;
+        try {
+            text = JsonPath.read(dataAsMap, "$.output.message.content[0].text");
+        } catch (PathNotFoundException e) {
+            // No text content (e.g., tool-only response)
+        }
+
+        // Check stop reason
+        String stopReason = null;
+        try {
+            stopReason = JsonPath.read(dataAsMap, "$.stopReason");
+        } catch (PathNotFoundException e) {
+            log.warn("No stopReason found in Bedrock response");
+        }
+
+        // Extract tool calls
+        List<ToolCallRequest> toolCalls = new ArrayList<>();
+        if ("tool_use".equals(stopReason)) {
+            try {
+                List<Map<String, Object>> contentList = JsonPath.read(dataAsMap, "$.output.message.content");
+                for (Map<String, Object> item : contentList) {
+                    if (item.containsKey("toolUse")) {
+                        Map<String, Object> toolUse = (Map<String, Object>) item.get("toolUse");
+                        toolCalls
+                            .add(
+                                ToolCallRequest
+                                    .builder()
+                                    .toolCallId((String) toolUse.get("toolUseId"))
+                                    .toolName((String) toolUse.get("name"))
+                                    .arguments(toolUse.get("input") instanceof Map ? (Map<String, Object>) toolUse.get("input") : Map.of())
+                                    .build()
+                            );
+                    }
+                }
+            } catch (PathNotFoundException e) {
+                log.warn("Could not extract tool calls from Bedrock response", e);
+            }
+        }
+
+        // Extract raw assistant message
+        Map<String, ?> rawAssistantMessage = null;
+        try {
+            rawAssistantMessage = JsonPath.read(dataAsMap, "$.output.message");
+        } catch (PathNotFoundException e) {
+            log.warn("Could not extract raw assistant message");
+        }
+
+        StopReason v2StopReason;
+        if (!toolCalls.isEmpty()) {
+            v2StopReason = StopReason.TOOL_USE;
+        } else if ("max_tokens".equals(stopReason)) {
+            v2StopReason = StopReason.MAX_TOKENS;
+        } else {
+            v2StopReason = StopReason.END_TURN;
+        }
+
+        return LLMResponse
+            .builder()
+            .textContent(text)
+            .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
+            .stopReason(v2StopReason)
+            .rawAssistantMessage(rawAssistantMessage)
+            .build();
+    }
+
+    private String formatV2Interactions(List<InteractionTurn> interactions) {
+        List<String> parts = new ArrayList<>();
+        for (InteractionTurn turn : interactions) {
+            if (turn instanceof AssistantTurn at) {
+                if (at.getRawMessage() != null) {
+                    parts.add(StringUtils.toJson(at.getRawMessage()));
+                }
+            } else if (turn instanceof ToolResultTurn tr) {
+                List<String> toolResultBlocks = new ArrayList<>();
+                for (ToolCallResult result : tr.getResults()) {
+                    String escapedContent = StringEscapeUtils.escapeJson(result.getContent() != null ? result.getContent() : "");
+                    StringBuilder block = new StringBuilder();
+                    block
+                        .append("{\"toolResult\":{\"toolUseId\":\"")
+                        .append(result.getToolCallId())
+                        .append("\",\"content\":[{\"text\":\"")
+                        .append(escapedContent)
+                        .append("\"}]");
+                    if (result.isError()) {
+                        block.append(",\"status\":\"error\"");
+                    }
+                    block.append("}}");
+                    toolResultBlocks.add(block.toString());
+                }
+                parts.add("{\"role\":\"user\",\"content\":[" + String.join(",", toolResultBlocks) + "]}");
+            }
+        }
+        return String.join(", ", parts);
     }
 
     /**

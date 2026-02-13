@@ -12,7 +12,8 @@ public enum MLAgentType {
     CONVERSATIONAL,
     CONVERSATIONAL_FLOW,
     PLAN_EXECUTE_AND_REFLECT,
-    AG_UI;
+    AG_UI,
+    CONVERSATIONAL_V2;
 
     public static MLAgentType from(String value) {
         if (value == null) {
