@@ -5,6 +5,7 @@
 
 package org.opensearch.ml.common.agent;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,15 @@ import org.apache.commons.text.StringEscapeUtils;
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.ml.common.FunctionName;
 import org.opensearch.ml.common.MLAgentType;
+import org.opensearch.ml.common.agent.v2.AssistantTurn;
+import org.opensearch.ml.common.agent.v2.InteractionTurn;
+import org.opensearch.ml.common.agent.v2.LLMRequest;
+import org.opensearch.ml.common.agent.v2.LLMResponse;
+import org.opensearch.ml.common.agent.v2.StopReason;
+import org.opensearch.ml.common.agent.v2.ToolCallRequest;
+import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolResultTurn;
+import org.opensearch.ml.common.agent.v2.ToolSpec;
 import org.opensearch.ml.common.connector.Connector;
 import org.opensearch.ml.common.connector.ConnectorAction;
 import org.opensearch.ml.common.connector.ConnectorClientConfig;
@@ -27,8 +37,15 @@ import org.opensearch.ml.common.input.execute.agent.Message;
 import org.opensearch.ml.common.input.execute.agent.SourceType;
 import org.opensearch.ml.common.input.execute.agent.VideoContent;
 import org.opensearch.ml.common.model.ModelProvider;
+import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.transport.register.MLRegisterModelInput;
+import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.common.utils.ToolUtils;
+
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.PathNotFoundException;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Model provider for Google Gemini generateContent API (v1beta).
@@ -50,6 +67,7 @@ import org.opensearch.ml.common.utils.ToolUtils;
  * All parameters consistently use the ${parameters.} prefix for uniformity.
  */
 // todo: refactor the processing so providers have to only provide the constants
+@Log4j2
 public class GeminiV1BetaGenerateContentModelProvider extends ModelProvider {
 
     private static final String REQUEST_BODY_TEMPLATE =
@@ -282,6 +300,162 @@ public class GeminiV1BetaGenerateContentModelProvider extends ModelProvider {
      * @return the corresponding Gemini API template string
      * @throws IllegalArgumentException if sourceType is null or unsupported
      */
+    // ========== V2 Agent Methods ==========
+
+    private static final String GEMINI_V2_TOOL_TEMPLATE = "{\"name\":\"%s\",\"description\":\"%s\",\"parameters\":%s}";
+
+    @Override
+    public void buildRequestParams(LLMRequest request, Map<String, String> params) {
+        // 1. System prompt
+        if (request.getSystemPrompt() != null) {
+            params.put("system_prompt", request.getSystemPrompt());
+        }
+
+        // 2. User message body
+        if (request.getCurrentInput() != null) {
+            String escapedInput = StringEscapeUtils.escapeJson(request.getCurrentInput());
+            params.put("body", "{\"role\":\"user\",\"parts\":[{\"text\":\"" + escapedInput + "\"}]}");
+        }
+
+        // 3. Tool specs (Gemini functionDeclarations format)
+        if (request.getToolSpecs() != null && !request.getToolSpecs().isEmpty()) {
+            List<String> toolJsons = new ArrayList<>();
+            for (ToolSpec tool : request.getToolSpecs()) {
+                String schemaJson = tool.getInputSchema() != null
+                    ? removeAdditionalProperties(StringUtils.toJson(tool.getInputSchema()))
+                    : "{}";
+                String escapedDesc = StringEscapeUtils.escapeJson(tool.getDescription() != null ? tool.getDescription() : "");
+                toolJsons.add(String.format(GEMINI_V2_TOOL_TEMPLATE, tool.getName(), escapedDesc, schemaJson));
+            }
+            params.put("_tools", String.join(",", toolJsons));
+            params
+                .put(
+                    "tool_configs",
+                    ", \"tools\": [{\"functionDeclarations\": [${parameters._tools:-}]}], \"toolConfig\": {\"functionCallingConfig\": {\"mode\": \"AUTO\"}}"
+                );
+        }
+
+        // 4. Interactions (assistant turns + tool results)
+        if (request.getInteractions() != null && !request.getInteractions().isEmpty()) {
+            String interactionsJson = formatV2Interactions(request.getInteractions());
+            if (!interactionsJson.isEmpty()) {
+                params.put("_interactions", ", " + interactionsJson);
+            }
+        }
+
+        // 5. No-escape params
+        params.put("no_escape_params", "_chat_history,_tools,_interactions,tool_configs,body");
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public LLMResponse parseResponse(ModelTensorOutput output) {
+        Map<String, ?> dataAsMap = output.getMlModelOutputs().get(0).getMlModelTensors().get(0).getDataAsMap();
+
+        // Extract text content
+        String text = null;
+        try {
+            text = JsonPath.read(dataAsMap, "$.candidates[0].content.parts[0].text");
+        } catch (PathNotFoundException e) {
+            // No text content (e.g., tool-only response)
+        }
+
+        // Extract tool calls — Gemini uses functionCall in parts
+        List<ToolCallRequest> toolCalls = new ArrayList<>();
+        try {
+            List<Map<String, Object>> partsList = JsonPath.read(dataAsMap, "$.candidates[0].content.parts");
+            if (partsList != null) {
+                for (Map<String, Object> part : partsList) {
+                    if (part.containsKey("functionCall")) {
+                        Map<String, Object> functionCall = (Map<String, Object>) part.get("functionCall");
+                        String toolName = (String) functionCall.get("name");
+                        Map<String, Object> args = functionCall.get("args") instanceof Map
+                            ? (Map<String, Object>) functionCall.get("args")
+                            : Map.of();
+                        toolCalls
+                            .add(
+                                ToolCallRequest
+                                    .builder()
+                                    .toolCallId(toolName)  // Gemini uses name as ID
+                                    .toolName(toolName)
+                                    .arguments(args)
+                                    .build()
+                            );
+                    }
+                }
+            }
+        } catch (PathNotFoundException e) {
+            log.warn("Could not extract parts from Gemini response", e);
+        }
+
+        // Extract raw assistant message (the content object)
+        Map<String, ?> rawAssistantMessage = null;
+        try {
+            rawAssistantMessage = JsonPath.read(dataAsMap, "$.candidates[0].content");
+        } catch (PathNotFoundException e) {
+            log.warn("Could not extract raw assistant content");
+        }
+
+        // Gemini finishReason is "STOP" for both normal and tool calls
+        StopReason v2StopReason;
+        if (!toolCalls.isEmpty()) {
+            v2StopReason = StopReason.TOOL_USE;
+        } else {
+            String finishReason = null;
+            try {
+                finishReason = JsonPath.read(dataAsMap, "$.candidates[0].finishReason");
+            } catch (PathNotFoundException e) {
+                // ignore
+            }
+            v2StopReason = "MAX_TOKENS".equals(finishReason) ? StopReason.MAX_TOKENS : StopReason.END_TURN;
+        }
+
+        return LLMResponse
+            .builder()
+            .textContent(text)
+            .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
+            .stopReason(v2StopReason)
+            .rawAssistantMessage(rawAssistantMessage)
+            .build();
+    }
+
+    private String formatV2Interactions(List<InteractionTurn> interactions) {
+        List<String> parts = new ArrayList<>();
+        for (InteractionTurn turn : interactions) {
+            if (turn instanceof AssistantTurn at) {
+                if (at.getRawMessage() != null) {
+                    parts.add(StringUtils.toJson(at.getRawMessage()));
+                }
+            } else if (turn instanceof ToolResultTurn tr) {
+                List<String> functionResponses = new ArrayList<>();
+                for (ToolCallResult result : tr.getResults()) {
+                    String escapedContent = StringEscapeUtils.escapeJson(result.getContent() != null ? result.getContent() : "");
+                    functionResponses
+                        .add(
+                            "{\"functionResponse\":{\"name\":\""
+                                + result.getToolCallId()
+                                + "\",\"response\":{\"text\":\""
+                                + escapedContent
+                                + "\"}}}"
+                        );
+                }
+                parts.add("{\"role\":\"user\",\"parts\":[" + String.join(",", functionResponses) + "]}");
+            }
+        }
+        return String.join(", ", parts);
+    }
+
+    /**
+     * Remove additionalProperties from JSON schema for Gemini compatibility.
+     * Gemini API does not support the additionalProperties field.
+     */
+    private String removeAdditionalProperties(String schemaJson) {
+        if (schemaJson == null)
+            return "{}";
+        // Simple string-based removal — handles the common case
+        return schemaJson.replaceAll(",?\\s*\"additionalProperties\"\\s*:\\s*(true|false|\\{[^}]*\\})", "").replaceAll("\\{\\s*,", "{");
+    }
+
     private String mapImageSourceTypeToGemini(SourceType sourceType) {
         if (sourceType == null) {
             String supportedTypes = Stream.of(SourceType.values()).map(SourceType::name).collect(Collectors.joining(", "));

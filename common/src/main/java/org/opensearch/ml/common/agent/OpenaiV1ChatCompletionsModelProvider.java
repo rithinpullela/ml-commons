@@ -5,6 +5,7 @@
 
 package org.opensearch.ml.common.agent;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,15 @@ import org.apache.commons.text.StringEscapeUtils;
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.ml.common.FunctionName;
 import org.opensearch.ml.common.MLAgentType;
+import org.opensearch.ml.common.agent.v2.AssistantTurn;
+import org.opensearch.ml.common.agent.v2.InteractionTurn;
+import org.opensearch.ml.common.agent.v2.LLMRequest;
+import org.opensearch.ml.common.agent.v2.LLMResponse;
+import org.opensearch.ml.common.agent.v2.StopReason;
+import org.opensearch.ml.common.agent.v2.ToolCallRequest;
+import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolResultTurn;
+import org.opensearch.ml.common.agent.v2.ToolSpec;
 import org.opensearch.ml.common.connector.Connector;
 import org.opensearch.ml.common.connector.ConnectorAction;
 import org.opensearch.ml.common.connector.ConnectorClientConfig;
@@ -26,8 +36,15 @@ import org.opensearch.ml.common.input.execute.agent.Message;
 import org.opensearch.ml.common.input.execute.agent.SourceType;
 import org.opensearch.ml.common.input.execute.agent.ToolCall;
 import org.opensearch.ml.common.model.ModelProvider;
+import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.transport.register.MLRegisterModelInput;
+import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.common.utils.ToolUtils;
+
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.PathNotFoundException;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Model provider for OpenAI Chat Completions API.
@@ -55,6 +72,7 @@ import org.opensearch.ml.common.utils.ToolUtils;
  * - DOCUMENT: NOT supported in Chat Completions API (throws IllegalArgumentException)
  */
 // todo: refactor the processing so providers have to only provide the constants
+@Log4j2
 public class OpenaiV1ChatCompletionsModelProvider extends ModelProvider {
 
     private static final String REQUEST_BODY_TEMPLATE = "{\"model\":\"${parameters.model}\","
@@ -335,6 +353,157 @@ public class OpenaiV1ChatCompletionsModelProvider extends ModelProvider {
      * @return the corresponding OpenAI API template string
      * @throws IllegalArgumentException if sourceType is null or unsupported
      */
+    // ========== V2 Agent Methods ==========
+
+    private static final String OPENAI_V2_TOOL_TEMPLATE =
+        "{\"type\":\"function\",\"function\":{\"name\":\"%s\",\"description\":\"%s\",\"parameters\":%s}}";
+
+    @Override
+    public void buildRequestParams(LLMRequest request, Map<String, String> params) {
+        // 1. System prompt — OpenAI uses a system message in the messages array
+        // We add it as a separate param and prefix it before the body
+        if (request.getSystemPrompt() != null) {
+            params.put("system_prompt", request.getSystemPrompt());
+        }
+
+        // 2. User message body with system message prefix
+        StringBuilder bodyBuilder = new StringBuilder();
+        // Add system message first
+        if (request.getSystemPrompt() != null) {
+            String escapedSystem = StringEscapeUtils.escapeJson(request.getSystemPrompt());
+            bodyBuilder.append("{\"role\":\"system\",\"content\":\"").append(escapedSystem).append("\"}, ");
+        }
+        // Add user message
+        if (request.getCurrentInput() != null) {
+            String escapedInput = StringEscapeUtils.escapeJson(request.getCurrentInput());
+            bodyBuilder.append("{\"role\":\"user\",\"content\":\"").append(escapedInput).append("\"}");
+        }
+        params.put("body", bodyBuilder.toString());
+
+        // 3. Tool specs (OpenAI function format)
+        if (request.getToolSpecs() != null && !request.getToolSpecs().isEmpty()) {
+            List<String> toolJsons = new ArrayList<>();
+            for (ToolSpec tool : request.getToolSpecs()) {
+                String schemaJson = tool.getInputSchema() != null ? StringUtils.toJson(tool.getInputSchema()) : "{}";
+                String escapedDesc = StringEscapeUtils.escapeJson(tool.getDescription() != null ? tool.getDescription() : "");
+                toolJsons.add(String.format(OPENAI_V2_TOOL_TEMPLATE, tool.getName(), escapedDesc, schemaJson));
+            }
+            params.put("_tools", String.join(",", toolJsons));
+            params.put("tool_configs", ", \"tools\": [${parameters._tools:-}]");
+        }
+
+        // 4. Interactions (assistant turns + tool results)
+        if (request.getInteractions() != null && !request.getInteractions().isEmpty()) {
+            String interactionsJson = formatV2Interactions(request.getInteractions());
+            if (!interactionsJson.isEmpty()) {
+                params.put("_interactions", ", " + interactionsJson);
+            }
+        }
+
+        // 5. No-escape params
+        params.put("no_escape_params", "_chat_history,_tools,_interactions,tool_configs,body");
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public LLMResponse parseResponse(ModelTensorOutput output) {
+        Map<String, ?> dataAsMap = output.getMlModelOutputs().get(0).getMlModelTensors().get(0).getDataAsMap();
+
+        // Extract text content
+        String text = null;
+        try {
+            text = JsonPath.read(dataAsMap, "$.choices[0].message.content");
+        } catch (PathNotFoundException e) {
+            // No text content
+        }
+
+        // Check finish reason
+        String finishReason = null;
+        try {
+            finishReason = JsonPath.read(dataAsMap, "$.choices[0].finish_reason");
+        } catch (PathNotFoundException e) {
+            log.warn("No finish_reason found in OpenAI response");
+        }
+
+        // Extract tool calls
+        List<ToolCallRequest> toolCalls = new ArrayList<>();
+        if ("tool_calls".equals(finishReason)) {
+            try {
+                List<Map<String, Object>> rawToolCalls = JsonPath.read(dataAsMap, "$.choices[0].message.tool_calls");
+                if (rawToolCalls != null) {
+                    for (Map<String, Object> tc : rawToolCalls) {
+                        String toolCallId = (String) tc.get("id");
+                        Map<String, Object> function = (Map<String, Object>) tc.get("function");
+                        String toolName = (String) function.get("name");
+                        // OpenAI returns arguments as a JSON string, parse it
+                        Object argsObj = function.get("arguments");
+                        Map<String, Object> arguments;
+                        if (argsObj instanceof String) {
+                            try {
+                                arguments = StringUtils.fromJson((String) argsObj, "arguments");
+                            } catch (Exception e) {
+                                arguments = Map.of("input", argsObj);
+                            }
+                        } else if (argsObj instanceof Map) {
+                            arguments = (Map<String, Object>) argsObj;
+                        } else {
+                            arguments = Map.of();
+                        }
+                        toolCalls.add(ToolCallRequest.builder().toolCallId(toolCallId).toolName(toolName).arguments(arguments).build());
+                    }
+                }
+            } catch (PathNotFoundException e) {
+                log.warn("Could not extract tool calls from OpenAI response", e);
+            }
+        }
+
+        // Extract raw assistant message
+        Map<String, ?> rawAssistantMessage = null;
+        try {
+            rawAssistantMessage = JsonPath.read(dataAsMap, "$.choices[0].message");
+        } catch (PathNotFoundException e) {
+            log.warn("Could not extract raw assistant message");
+        }
+
+        StopReason v2StopReason;
+        if (!toolCalls.isEmpty()) {
+            v2StopReason = StopReason.TOOL_USE;
+        } else if ("length".equals(finishReason)) {
+            v2StopReason = StopReason.MAX_TOKENS;
+        } else {
+            v2StopReason = StopReason.END_TURN;
+        }
+
+        return LLMResponse
+            .builder()
+            .textContent(text)
+            .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
+            .stopReason(v2StopReason)
+            .rawAssistantMessage(rawAssistantMessage)
+            .build();
+    }
+
+    private String formatV2Interactions(List<InteractionTurn> interactions) {
+        List<String> parts = new ArrayList<>();
+        for (InteractionTurn turn : interactions) {
+            if (turn instanceof AssistantTurn at) {
+                if (at.getRawMessage() != null) {
+                    parts.add(StringUtils.toJson(at.getRawMessage()));
+                }
+            } else if (turn instanceof ToolResultTurn tr) {
+                // OpenAI: each tool result is a separate message
+                for (ToolCallResult result : tr.getResults()) {
+                    String escapedContent = StringEscapeUtils.escapeJson(result.getContent() != null ? result.getContent() : "");
+                    parts
+                        .add(
+                            "{\"role\":\"tool\",\"tool_call_id\":\"" + result.getToolCallId() + "\",\"content\":\"" + escapedContent + "\"}"
+                        );
+                }
+            }
+        }
+        return String.join(", ", parts);
+    }
+
     private String mapImageSourceTypeToOpenAI(SourceType sourceType) {
         if (sourceType == null) {
             String supportedTypes = Stream.of(SourceType.values()).map(SourceType::name).collect(Collectors.joining(", "));
