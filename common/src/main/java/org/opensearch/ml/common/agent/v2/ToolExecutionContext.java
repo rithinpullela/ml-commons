@@ -3,20 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package org.opensearch.ml.engine.agents.v2.tools;
+package org.opensearch.ml.common.agent.v2;
 
-import org.opensearch.ml.engine.agents.v2.AgentState;
+import java.util.Map;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 
 /**
  * Context available to tools during execution.
+ * Contains only the information tools need — no internal agent state.
  */
 @Data
 @AllArgsConstructor
 public class ToolExecutionContext {
     private String toolCallId;
-    private AgentState agentState;
     private String tenantId;
+    private Map<String, String> runtimeParams;
 }

@@ -13,8 +13,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.ml.common.agent.v2.AgentToolV2;
 import org.opensearch.ml.common.agent.v2.ToolCallRequest;
 import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolExecutionContext;
 import org.opensearch.ml.common.agent.v2.ToolSpec;
 
 import lombok.extern.log4j.Log4j2;
@@ -86,8 +88,8 @@ public class ToolHandler {
             // Create per-tool context with the tool call id
             ToolExecutionContext toolContext = new ToolExecutionContext(
                 call.getToolCallId(),
-                context.getAgentState(),
-                context.getTenantId()
+                context.getTenantId(),
+                context.getRuntimeParams()
             );
 
             try {

@@ -85,7 +85,6 @@ import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.settings.SettingsChangeListener;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.engine.Executable;
-import org.opensearch.ml.engine.agents.v2.AgentV2;
 import org.opensearch.ml.engine.agents.v2.AgentV2Factory;
 import org.opensearch.ml.engine.algorithms.contextmanager.ContextManagerFactory;
 import org.opensearch.ml.engine.annotation.Function;
@@ -131,6 +130,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
     private ClusterService clusterService;
     private NamedXContentRegistry xContentRegistry;
     private Map<String, Tool.Factory> toolFactories;
+    private Map<String, org.opensearch.ml.common.agent.v2.AgentToolV2Factory> v2ToolFactories;
     private Map<String, Memory.Factory> memoryFactoryMap;
     private volatile Boolean isMultiTenancyEnabled;
     private Encryptor encryptor;
@@ -143,6 +143,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         ClusterService clusterService,
         NamedXContentRegistry xContentRegistry,
         Map<String, Tool.Factory> toolFactories,
+        Map<String, org.opensearch.ml.common.agent.v2.AgentToolV2Factory> v2ToolFactories,
         Map<String, Memory.Factory> memoryFactoryMap,
         MLFeatureEnabledSetting mlFeatureEnabledSetting,
         Encryptor encryptor
@@ -153,6 +154,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         this.clusterService = clusterService;
         this.xContentRegistry = xContentRegistry;
         this.toolFactories = toolFactories;
+        this.v2ToolFactories = v2ToolFactories;
         this.memoryFactoryMap = memoryFactoryMap;
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
         this.encryptor = encryptor;
@@ -983,7 +985,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
 
     /**
      * Execute a V2 agent using the V2 event loop.
-     * POC: No memory, no hooks, no async support. Sync-only for now.
+     * Async: Tool creation may require MCP connector discovery.
      */
     private void executeAgentV2(
         RemoteInferenceInputDataSet inputDataSet,
@@ -1009,15 +1011,29 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                 return;
             }
 
-            AgentV2 agentV2 = AgentV2Factory.create(mlAgent, client, params, toolFactories, internalModelId);
-
-            agentV2.run(question, ActionListener.wrap(answer -> {
-                modelTensors.add(ModelTensor.builder().name("response").result(answer).build());
-                listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
-            }, e -> {
-                log.error("V2 agent execution failed", e);
-                listener.onFailure(e);
-            }));
+            AgentV2Factory
+                .create(
+                    mlAgent,
+                    client,
+                    sdkClient,
+                    encryptor,
+                    params,
+                    toolFactories,
+                    v2ToolFactories,
+                    internalModelId,
+                    ActionListener.wrap(agentV2 -> {
+                        agentV2.run(question, ActionListener.wrap(answer -> {
+                            modelTensors.add(ModelTensor.builder().name("response").result(answer).build());
+                            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
+                        }, e -> {
+                            log.error("V2 agent execution failed", e);
+                            listener.onFailure(e);
+                        }));
+                    }, e -> {
+                        log.error("Failed to create V2 agent", e);
+                        listener.onFailure(e);
+                    })
+                );
         } catch (Exception e) {
             log.error("Failed to create V2 agent", e);
             listener.onFailure(e);

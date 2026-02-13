@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package org.opensearch.ml.engine.agents.v2.tools;
+package org.opensearch.ml.common.agent.v2;
 
 import java.util.Map;
 
 import org.opensearch.core.action.ActionListener;
-import org.opensearch.ml.common.agent.v2.ToolCallResult;
-import org.opensearch.ml.common.agent.v2.ToolSpec;
 
 /**
  * V2 Tool Interface — the primary tool contract for V2 agents.

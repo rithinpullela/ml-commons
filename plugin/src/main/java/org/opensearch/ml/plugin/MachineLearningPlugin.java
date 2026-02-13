@@ -525,6 +525,7 @@ public class MachineLearningPlugin extends Plugin
     @VisibleForTesting
     Map<String, Tool.Factory> externalToolFactories;
     private Map<String, Tool.Factory> toolFactories;
+    private Map<String, org.opensearch.ml.common.agent.v2.AgentToolV2Factory> v2ToolFactories;
     private ScriptService scriptService;
     private Encryptor encryptor;
     private McpToolsHelper mcpToolsHelper;
@@ -859,6 +860,18 @@ public class MachineLearningPlugin extends Plugin
             toolFactories.putAll(externalToolFactories);
         }
 
+        // V2 native tool factories
+        v2ToolFactories = new HashMap<>();
+        org.opensearch.ml.engine.agents.v2.tools.SearchIndexToolV2.Factory searchIndexToolV2Factory =
+            org.opensearch.ml.engine.agents.v2.tools.SearchIndexToolV2.Factory.getInstance();
+        searchIndexToolV2Factory.init(client, xContentRegistry);
+        v2ToolFactories.put(org.opensearch.ml.engine.agents.v2.tools.SearchIndexToolV2.TYPE, searchIndexToolV2Factory);
+
+        org.opensearch.ml.engine.agents.v2.tools.MLModelToolV2.Factory mlModelToolV2Factory =
+            org.opensearch.ml.engine.agents.v2.tools.MLModelToolV2.Factory.getInstance();
+        mlModelToolV2Factory.init(client);
+        v2ToolFactories.put(org.opensearch.ml.engine.agents.v2.tools.MLModelToolV2.TYPE, mlModelToolV2Factory);
+
         ToolFactoryWrapper toolFactoryWrapper = new ToolFactoryWrapper(toolFactories);
 
         agentModelsSearcher = new AgentModelsSearcher(toolFactories);
@@ -884,6 +897,7 @@ public class MachineLearningPlugin extends Plugin
             clusterService,
             xContentRegistry,
             toolFactories,
+            v2ToolFactories,
             memoryFactoryMap,
             mlFeatureEnabledSetting,
             encryptor

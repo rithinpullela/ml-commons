@@ -14,10 +14,10 @@ import org.opensearch.ml.common.agent.v2.InteractionTurn;
 import org.opensearch.ml.common.agent.v2.LLMRequest;
 import org.opensearch.ml.common.agent.v2.LLMResponse;
 import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolExecutionContext;
 import org.opensearch.ml.common.agent.v2.ToolResultTurn;
 import org.opensearch.ml.engine.agents.v2.context.ConversationManager;
 import org.opensearch.ml.engine.agents.v2.llm.LLMInterface;
-import org.opensearch.ml.engine.agents.v2.tools.ToolExecutionContext;
 import org.opensearch.ml.engine.agents.v2.tools.ToolHandler;
 
 import lombok.extern.log4j.Log4j2;
@@ -110,8 +110,8 @@ public class AgentV2 {
 
         ToolExecutionContext context = new ToolExecutionContext(
             null, // individual tool call IDs set in ToolHandler
-            state,
-            state.getTenantId()
+            state.getTenantId(),
+            state.getRuntimeParams()
         );
 
         toolHandler.executeParallel(response.getToolCalls(), context, ActionListener.wrap(results -> {

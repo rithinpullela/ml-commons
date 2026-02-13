@@ -11,12 +11,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.ml.common.agent.v2.AgentToolV2;
 import org.opensearch.ml.common.agent.v2.ToolCallResult;
+import org.opensearch.ml.common.agent.v2.ToolExecutionContext;
 import org.opensearch.ml.common.agent.v2.ToolSpec;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.common.utils.StringUtils;
-import org.opensearch.ml.engine.agents.v2.tools.AgentToolV2;
-import org.opensearch.ml.engine.agents.v2.tools.ToolExecutionContext;
 
 import lombok.extern.log4j.Log4j2;
 
