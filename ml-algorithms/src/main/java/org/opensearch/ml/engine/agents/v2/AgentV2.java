@@ -5,12 +5,10 @@
 
 package org.opensearch.ml.engine.agents.v2;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.ml.common.agent.v2.AssistantTurn;
-import org.opensearch.ml.common.agent.v2.InteractionTurn;
 import org.opensearch.ml.common.agent.v2.LLMRequest;
 import org.opensearch.ml.common.agent.v2.LLMResponse;
 import org.opensearch.ml.common.agent.v2.ToolCallResult;
@@ -52,19 +50,23 @@ public class AgentV2 {
     /**
      * Run the agent with the given input.
      * The listener receives the final text answer as a String.
+     * Interaction history is stored in AgentState and accessible after completion.
      */
     public void run(String input, ActionListener<String> listener) {
         log.info("V2 Agent starting: {}, maxIterations={}", state.getAgentConfig().getName(), state.getMaxIterations());
-        List<InteractionTurn> interactions = new ArrayList<>();
 
         // Start the event loop
-        runLoop(input, interactions, listener);
+        runLoop(input, listener);
+    }
+
+    public AgentState getState() {
+        return state;
     }
 
     /**
      * Recursive event loop: LLM call → tool execution → LLM call → ...
      */
-    private void runLoop(String input, List<InteractionTurn> interactions, ActionListener<String> listener) {
+    private void runLoop(String input, ActionListener<String> listener) {
         int iteration = state.incrementIteration();
         if (iteration > state.getMaxIterations()) {
             log.warn("V2 Agent reached max iterations ({}), returning last available response", state.getMaxIterations());
@@ -75,10 +77,10 @@ public class AgentV2 {
         log.info("V2 Agent iteration {}/{}", iteration, state.getMaxIterations());
 
         // Build request via conversation manager
-        LLMRequest request = conversationManager.buildNextRequest(state, input, interactions, toolHandler.getToolSpecs());
+        LLMRequest request = conversationManager.buildNextRequest(state, input, state.getInteractions(), toolHandler.getToolSpecs());
 
         // Call LLM
-        llm.call(request, ActionListener.wrap(response -> handleLLMResponse(input, interactions, response, listener), e -> {
+        llm.call(request, ActionListener.wrap(response -> handleLLMResponse(input, response, listener), e -> {
             log.error("V2 Agent LLM call failed at iteration {}", iteration, e);
             listener.onFailure(e);
         }));
@@ -87,14 +89,9 @@ public class AgentV2 {
     /**
      * Handle LLM response: either return final answer or execute tool calls and loop.
      */
-    private void handleLLMResponse(
-        String input,
-        List<InteractionTurn> interactions,
-        LLMResponse response,
-        ActionListener<String> listener
-    ) {
+    private void handleLLMResponse(String input, LLMResponse response, ActionListener<String> listener) {
         // Record assistant turn
-        interactions.add(new AssistantTurn(response.getRawAssistantMessage()));
+        state.addInteraction(new AssistantTurn(response.getRawAssistantMessage()));
 
         if (response.isFinalAnswer()) {
             // Done! Return the text response
@@ -116,12 +113,12 @@ public class AgentV2 {
 
         toolHandler.executeParallel(response.getToolCalls(), context, ActionListener.wrap(results -> {
             // Record tool results
-            interactions.add(new ToolResultTurn(results));
+            state.addInteraction(new ToolResultTurn(results));
 
             logToolResults(results);
 
-            // Continue the loop with tool results added to interactions
-            runLoop(input, interactions, listener);
+            // Continue the loop with tool results added to state
+            runLoop(input, listener);
         }, e -> {
             log.error("V2 Agent tool execution failed at iteration {}", state.getIteration(), e);
             listener.onFailure(e);

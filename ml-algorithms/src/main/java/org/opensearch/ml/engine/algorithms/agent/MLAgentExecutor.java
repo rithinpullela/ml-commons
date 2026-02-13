@@ -1023,8 +1023,12 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     internalModelId,
                     ActionListener.wrap(agentV2 -> {
                         agentV2.run(question, ActionListener.wrap(answer -> {
-                            modelTensors.add(ModelTensor.builder().name("response").result(answer).build());
-                            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
+                            if (agentV2.getState().isVerbose()) {
+                                buildVerboseOutput(agentV2, answer, outputs, listener);
+                            } else {
+                                modelTensors.add(ModelTensor.builder().name("response").result(answer).build());
+                                listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
+                            }
                         }, e -> {
                             log.error("V2 agent execution failed", e);
                             listener.onFailure(e);
@@ -1037,6 +1041,67 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         } catch (Exception e) {
             log.error("Failed to create V2 agent", e);
             listener.onFailure(e);
+        }
+    }
+
+    /**
+     * Build verbose output containing the full chain-of-thought interaction history.
+     * Each LLM response and tool execution result is returned as a separate ModelTensors entry,
+     * similar to V1's cotModelTensors behavior.
+     */
+    @SuppressWarnings("removal")
+    private void buildVerboseOutput(
+        org.opensearch.ml.engine.agents.v2.AgentV2 agentV2,
+        String finalAnswer,
+        List<ModelTensors> outputs,
+        ActionListener<Output> listener
+    ) {
+        try {
+            Gson gson = new Gson();
+            List<ModelTensors> verboseOutputs = new ArrayList<>();
+
+            for (org.opensearch.ml.common.agent.v2.InteractionTurn turn : agentV2.getState().getInteractions()) {
+                if (turn instanceof org.opensearch.ml.common.agent.v2.AssistantTurn assistantTurn) {
+                    // LLM response turn — include the raw assistant message
+                    Map<String, ?> rawMessage = assistantTurn.getRawMessage();
+                    String responseText = rawMessage != null
+                        ? AccessController.doPrivileged((PrivilegedExceptionAction<String>) () -> gson.toJson(rawMessage))
+                        : "";
+                    ModelTensor tensor = ModelTensor.builder().name("response").result(responseText).build();
+                    verboseOutputs.add(ModelTensors.builder().mlModelTensors(List.of(tensor)).build());
+                } else if (turn instanceof org.opensearch.ml.common.agent.v2.ToolResultTurn toolResultTurn) {
+                    // Tool result turn — one tensor per tool call result
+                    List<ModelTensor> toolTensors = new ArrayList<>();
+                    for (org.opensearch.ml.common.agent.v2.ToolCallResult result : toolResultTurn.getResults()) {
+                        Map<String, String> dataMap = new HashMap<>();
+                        dataMap.put("tool_name", result.getToolName());
+                        dataMap.put("tool_call_id", result.getToolCallId());
+                        dataMap.put("status", result.getStatus().name());
+                        ModelTensor tensor = ModelTensor
+                            .builder()
+                            .name(result.getToolName())
+                            .result(result.getContent())
+                            .dataAsMap(Collections.singletonMap(result.getToolName(), (Object) dataMap))
+                            .build();
+                        toolTensors.add(tensor);
+                    }
+                    verboseOutputs.add(ModelTensors.builder().mlModelTensors(toolTensors).build());
+                }
+            }
+
+            // Add the final answer as the last entry
+            ModelTensor finalTensor = ModelTensor.builder().name("response").result(finalAnswer).build();
+            verboseOutputs.add(ModelTensors.builder().mlModelTensors(List.of(finalTensor)).build());
+
+            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(verboseOutputs).build());
+        } catch (Exception e) {
+            log.error("Failed to build verbose output, falling back to simple response", e);
+            // Fallback: return just the final answer
+            outputs.clear();
+            List<ModelTensor> fallbackTensors = new ArrayList<>();
+            fallbackTensors.add(ModelTensor.builder().name("response").result(finalAnswer).build());
+            outputs.add(ModelTensors.builder().mlModelTensors(fallbackTensors).build());
+            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
         }
     }
 

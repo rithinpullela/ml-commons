@@ -5,11 +5,15 @@
 
 package org.opensearch.ml.engine.agents.v2;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.opensearch.ml.common.agent.MLAgent;
+import org.opensearch.ml.common.agent.v2.InteractionTurn;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -25,18 +29,28 @@ public class AgentState {
     private final String systemPrompt;
     private final String tenantId;
     private final Map<String, String> runtimeParams;
+    private final boolean verbose;
 
     private final AtomicInteger iteration = new AtomicInteger(0);
     @Setter
     private String finalAnswer;
     private final Map<String, Object> additionalInfo = new ConcurrentHashMap<>();
+    private final List<InteractionTurn> interactions = new ArrayList<>();
 
-    public AgentState(MLAgent agentConfig, int maxIterations, String systemPrompt, String tenantId, Map<String, String> runtimeParams) {
+    public AgentState(
+        MLAgent agentConfig,
+        int maxIterations,
+        String systemPrompt,
+        String tenantId,
+        Map<String, String> runtimeParams,
+        boolean verbose
+    ) {
         this.agentConfig = agentConfig;
         this.maxIterations = maxIterations;
         this.systemPrompt = systemPrompt;
         this.tenantId = tenantId;
         this.runtimeParams = runtimeParams;
+        this.verbose = verbose;
     }
 
     public int getIteration() {
@@ -45,6 +59,14 @@ public class AgentState {
 
     public int incrementIteration() {
         return iteration.incrementAndGet();
+    }
+
+    public List<InteractionTurn> getInteractions() {
+        return Collections.unmodifiableList(interactions);
+    }
+
+    public void addInteraction(InteractionTurn turn) {
+        interactions.add(turn);
     }
 
     public static AgentState from(MLAgent agent, Map<String, String> params) {
@@ -59,8 +81,9 @@ public class AgentState {
 
         String systemPrompt = resolveSystemPrompt(agent, params);
         String tenantId = params.get("tenant_id");
+        boolean verbose = Boolean.parseBoolean(params.getOrDefault("verbose", "false"));
 
-        return new AgentState(agent, maxIterations, systemPrompt, tenantId, params);
+        return new AgentState(agent, maxIterations, systemPrompt, tenantId, params, verbose);
     }
 
     private static String resolveSystemPrompt(MLAgent agent, Map<String, String> params) {
