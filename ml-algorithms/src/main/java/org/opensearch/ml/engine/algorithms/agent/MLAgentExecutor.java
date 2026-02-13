@@ -85,6 +85,8 @@ import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.settings.SettingsChangeListener;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.engine.Executable;
+import org.opensearch.ml.engine.agents.v2.AgentV2;
+import org.opensearch.ml.engine.agents.v2.AgentV2Factory;
 import org.opensearch.ml.engine.algorithms.contextmanager.ContextManagerFactory;
 import org.opensearch.ml.engine.annotation.Function;
 import org.opensearch.ml.engine.encryptor.Encryptor;
@@ -908,6 +910,13 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
             processContextManagement(mlAgent, hookRegistry, inputDataSet);
         }
 
+        // V2 Agent routing: If agent type is CONVERSATIONAL_V2, use the V2 event loop
+        MLAgentType agentType = MLAgentType.from(mlAgent.getType().toUpperCase(Locale.ROOT));
+        if (agentType == MLAgentType.CONVERSATIONAL_V2) {
+            executeAgentV2(inputDataSet, mlAgent, outputs, modelTensors, listener);
+            return;
+        }
+
         MLAgentRunner mlAgentRunner = getAgentRunner(mlAgent, hookRegistry);
         String parentInteractionId = inputDataSet.getParameters().get(PARENT_INTERACTION_ID);
 
@@ -969,6 +978,49 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                 log.error("Failed to run agent", e);
                 agentActionListener.onFailure(e);
             }
+        }
+    }
+
+    /**
+     * Execute a V2 agent using the V2 event loop.
+     * POC: No memory, no hooks, no async support. Sync-only for now.
+     */
+    private void executeAgentV2(
+        RemoteInferenceInputDataSet inputDataSet,
+        MLAgent mlAgent,
+        List<ModelTensors> outputs,
+        List<ModelTensor> modelTensors,
+        ActionListener<Output> listener
+    ) {
+        try {
+            String internalModelId = mlAgent.getLlm() != null ? mlAgent.getLlm().getModelId() : null;
+            if (internalModelId == null) {
+                listener
+                    .onFailure(
+                        new IllegalStateException("V2 agent must have a registered model (internal model ID not found in llm.model_id)")
+                    );
+                return;
+            }
+
+            Map<String, String> params = inputDataSet.getParameters() != null ? inputDataSet.getParameters() : new HashMap<>();
+            String question = params.get(QUESTION);
+            if (question == null || question.isEmpty()) {
+                listener.onFailure(new IllegalArgumentException("V2 agent requires a 'question' parameter"));
+                return;
+            }
+
+            AgentV2 agentV2 = AgentV2Factory.create(mlAgent, client, params, toolFactories, internalModelId);
+
+            agentV2.run(question, ActionListener.wrap(answer -> {
+                modelTensors.add(ModelTensor.builder().name("response").result(answer).build());
+                listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(outputs).build());
+            }, e -> {
+                log.error("V2 agent execution failed", e);
+                listener.onFailure(e);
+            }));
+        } catch (Exception e) {
+            log.error("Failed to create V2 agent", e);
+            listener.onFailure(e);
         }
     }
 

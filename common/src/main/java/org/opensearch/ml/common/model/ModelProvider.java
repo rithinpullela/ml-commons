@@ -9,11 +9,14 @@ import java.util.List;
 import java.util.Map;
 
 import org.opensearch.ml.common.MLAgentType;
+import org.opensearch.ml.common.agent.v2.LLMRequest;
+import org.opensearch.ml.common.agent.v2.LLMResponse;
 import org.opensearch.ml.common.connector.Connector;
 import org.opensearch.ml.common.input.execute.agent.AgentInput;
 import org.opensearch.ml.common.input.execute.agent.ContentBlock;
 import org.opensearch.ml.common.input.execute.agent.InputType;
 import org.opensearch.ml.common.input.execute.agent.Message;
+import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.transport.register.MLRegisterModelInput;
 
 /**
@@ -82,6 +85,25 @@ public abstract class ModelProvider {
      * @return Map of parameters for the provider's request body template
      * @throws IllegalArgumentException if input type is unsupported
      */
+    // ========== V2 Agent Methods ==========
+
+    /**
+     * Build the complete params map for a V2 agent LLM request.
+     * Populates system_prompt, body, _tools, tool_configs, _interactions, no_escape_params.
+     * Default throws UnsupportedOperationException — providers override to support V2.
+     */
+    public void buildRequestParams(LLMRequest request, Map<String, String> params) {
+        throw new UnsupportedOperationException("V2 agent buildRequestParams not implemented for this provider");
+    }
+
+    /**
+     * Parse raw LLM response into a V2 LLMResponse.
+     * Default throws UnsupportedOperationException — providers override to support V2.
+     */
+    public LLMResponse parseResponse(ModelTensorOutput output) {
+        throw new UnsupportedOperationException("V2 agent parseResponse not implemented for this provider");
+    }
+
     public Map<String, String> mapAgentInput(AgentInput agentInput, MLAgentType type) {
         if (agentInput == null || agentInput.getInput() == null) {
             throw new IllegalArgumentException("AgentInput and its input field cannot be null");
