@@ -398,7 +398,20 @@ public class MLChatAgentRunner implements MLAgentRunner {
         // If sdkClient is null, skip model resolution and use model ID directly
         // This can happen in tests or certain deployment configurations
         if (sdkClient == null) {
-            continueRunReAct(llm, tools, toolSpecMap, parameters, memory, sessionId, tenantId, listener, functionCalling, backendTools, llmModelId, llmModelId);
+            continueRunReAct(
+                llm,
+                tools,
+                toolSpecMap,
+                parameters,
+                memory,
+                sessionId,
+                tenantId,
+                listener,
+                functionCalling,
+                backendTools,
+                llmModelId,
+                llmModelId
+            );
             return;
         }
 
@@ -410,16 +423,55 @@ public class MLChatAgentRunner implements MLAgentRunner {
             AgentUtils.resolveModelUrl(mlModel, tenantId, sdkClient, client, ActionListener.wrap(url -> {
                 log.debug("Resolved model URL: {}", url);
                 // Proceed with ReAct loop
-                continueRunReAct(llm, tools, toolSpecMap, parameters, memory, sessionId, tenantId, listener, functionCalling, backendTools, url, modelName);
+                continueRunReAct(
+                    llm,
+                    tools,
+                    toolSpecMap,
+                    parameters,
+                    memory,
+                    sessionId,
+                    tenantId,
+                    listener,
+                    functionCalling,
+                    backendTools,
+                    url,
+                    modelName
+                );
             }, e -> {
                 // On URL resolution error, use model ID as fallback for URL, but keep actual model name
                 log.debug("Failed to resolve model URL, using model ID as fallback", e);
-                continueRunReAct(llm, tools, toolSpecMap, parameters, memory, sessionId, tenantId, listener, functionCalling, backendTools, llmModelId, modelName);
+                continueRunReAct(
+                    llm,
+                    tools,
+                    toolSpecMap,
+                    parameters,
+                    memory,
+                    sessionId,
+                    tenantId,
+                    listener,
+                    functionCalling,
+                    backendTools,
+                    llmModelId,
+                    modelName
+                );
             }));
         }, e -> {
             // On model fetch error, use model ID as fallback for URL, no model name available
             log.debug("Failed to fetch model for URL resolution, using model ID as fallback", e);
-            continueRunReAct(llm, tools, toolSpecMap, parameters, memory, sessionId, tenantId, listener, functionCalling, backendTools, llmModelId, null);
+            continueRunReAct(
+                llm,
+                tools,
+                toolSpecMap,
+                parameters,
+                memory,
+                sessionId,
+                tenantId,
+                listener,
+                functionCalling,
+                backendTools,
+                llmModelId,
+                null
+            );
         }));
     }
 
@@ -505,6 +557,37 @@ public class MLChatAgentRunner implements MLAgentRunner {
                         } catch (Exception e) {
                             log.debug("Failed to extract token usage", e);
                         }
+                    }
+
+                    // Check if this is a streaming completion marker (text already streamed to client).
+                    // The streaming handler sets streaming_complete=true (NOT is_last=true) to avoid
+                    // prematurely closing the HTTP response — StreamingWrapper sends the real is_last=true.
+                    Map<String, ?> firstTensorData = tmpModelTensorOutput
+                        .getMlModelOutputs()
+                        .get(0)
+                        .getMlModelTensors()
+                        .get(0)
+                        .getDataAsMap();
+                    if (firstTensorData != null
+                        && Boolean.TRUE.equals(firstTensorData.get("streaming_complete"))
+                        && "".equals(firstTensorData.get("content"))) {
+                        sendFinalAnswer(
+                            sessionId,
+                            listener,
+                            question,
+                            parentInteractionId,
+                            verbose,
+                            traceDisabled,
+                            traceTensors,
+                            memory,
+                            traceNumber,
+                            additionalInfo,
+                            "(streamed)", // text was already streamed to client
+                            tokenTracker,
+                            tenantId
+                        );
+                        cleanUpResource(tools);
+                        return;
                     }
 
                     List<String> llmResponsePatterns = gson.fromJson(tmpParameters.get("llm_response_pattern"), List.class);
@@ -983,33 +1066,35 @@ public class MLChatAgentRunner implements MLAgentRunner {
                         parentInteractionId,
                         Map.of(AI_RESPONSE_FIELD, copyOfFinalAnswer, ADDITIONAL_INFO_FIELD, additionalInfo),
                         ActionListener.wrap(res -> {
-                            streamingWrapper.sendFinalResponse(
-                                sessionId,
-                                listener,
-                                parentInteractionId,
-                                verbose,
-                                cotModelTensors,
-                                additionalInfo,
-                                copyOfFinalAnswer,
-                                tokenTracker,
-                                tenantId
-                            );
+                            streamingWrapper
+                                .sendFinalResponse(
+                                    sessionId,
+                                    listener,
+                                    parentInteractionId,
+                                    verbose,
+                                    cotModelTensors,
+                                    additionalInfo,
+                                    copyOfFinalAnswer,
+                                    tokenTracker,
+                                    tenantId
+                                );
                         }, e -> { listener.onFailure(e); })
                     );
             }, e -> { listener.onFailure(e); });
             saveMessage(memory, question, finalAnswer, sessionId, parentInteractionId, traceNumber, true, traceDisabled, saveTraceListener);
         } else {
-            streamingWrapper.sendFinalResponse(
-                sessionId,
-                listener,
-                parentInteractionId,
-                verbose,
-                cotModelTensors,
-                additionalInfo,
-                finalAnswer,
-                tokenTracker,
-                tenantId
-            );
+            streamingWrapper
+                .sendFinalResponse(
+                    sessionId,
+                    listener,
+                    parentInteractionId,
+                    verbose,
+                    cotModelTensors,
+                    additionalInfo,
+                    finalAnswer,
+                    tokenTracker,
+                    tenantId
+                );
         }
     }
 
@@ -1127,10 +1212,24 @@ public class MLChatAgentRunner implements MLAgentRunner {
                 ModelTensors.builder().mlModelTensors(List.of(ModelTensor.builder().name("response").result(finalAnswer2).build())).build()
             );
 
-        // Add token usage tensor if verbose and tokens were tracked
-        if (verbose && tokenTracker != null && tokenTracker.hasUsage()) {
+        List<ModelTensors> finalModelTensors = createFinalAnswerTensors(
+            createModelTensors(sessionId, parentInteractionId),
+            List
+                .of(
+                    ModelTensor
+                        .builder()
+                        .name("response")
+                        .dataAsMap(Map.of("response", finalAnswer2, ADDITIONAL_INFO_FIELD, additionalInfo))
+                        .build()
+                )
+        );
+
+        List<ModelTensors> responseTensors = verbose ? cotModelTensors : finalModelTensors;
+
+        // Add token usage tensor if tokens were tracked
+        if (tokenTracker != null && tokenTracker.hasUsage()) {
             Map<String, Object> tokenUsageMap = tokenTracker.toOutputMap();
-            cotModelTensors
+            responseTensors
                 .add(
                     ModelTensors
                         .builder()
@@ -1153,22 +1252,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
             }
         }
 
-        List<ModelTensors> finalModelTensors = createFinalAnswerTensors(
-            createModelTensors(sessionId, parentInteractionId),
-            List
-                .of(
-                    ModelTensor
-                        .builder()
-                        .name("response")
-                        .dataAsMap(Map.of("response", finalAnswer2, ADDITIONAL_INFO_FIELD, additionalInfo))
-                        .build()
-                )
-        );
-        if (verbose) {
-            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(cotModelTensors).build());
-        } else {
-            listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(finalModelTensors).build());
-        }
+        listener.onResponse(ModelTensorOutput.builder().mlModelOutputs(responseTensors).build());
     }
 
     private void handleMaxIterationsReached(

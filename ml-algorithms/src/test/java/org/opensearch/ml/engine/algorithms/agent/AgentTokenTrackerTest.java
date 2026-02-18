@@ -113,11 +113,7 @@ public class AgentTokenTrackerTest {
 
         // Find each model's data
         Map<String, Object> gpt4Data = perModelUsage.stream().filter(m -> "gpt-4".equals(m.get("model_id"))).findFirst().orElse(null);
-        Map<String, Object> claudeData = perModelUsage
-            .stream()
-            .filter(m -> "claude-3".equals(m.get("model_id")))
-            .findFirst()
-            .orElse(null);
+        Map<String, Object> claudeData = perModelUsage.stream().filter(m -> "claude-3".equals(m.get("model_id"))).findFirst().orElse(null);
 
         assertNotNull(gpt4Data);
         assertNotNull(claudeData);

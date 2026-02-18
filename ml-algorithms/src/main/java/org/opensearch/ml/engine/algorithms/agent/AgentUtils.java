@@ -81,10 +81,10 @@ import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.ml.common.MLAgentType;
+import org.opensearch.ml.common.MLModel;
 import org.opensearch.ml.common.agent.MLAgent;
 import org.opensearch.ml.common.agent.MLMemorySpec;
 import org.opensearch.ml.common.agent.MLToolSpec;
-import org.opensearch.ml.common.MLModel;
 import org.opensearch.ml.common.connector.Connector;
 import org.opensearch.ml.common.connector.HttpConnector;
 import org.opensearch.ml.common.connector.McpConnector;
@@ -980,9 +980,7 @@ public class AgentUtils {
                     try {
                         GetResponse gr = r.parser() == null ? null : GetResponse.fromXContent(r.parser());
                         if (gr != null && gr.isExists()) {
-                            try (
-                                XContentParser parser = createXContentParserFromRegistry(xContentRegistry, gr.getSourceAsBytesRef())
-                            ) {
+                            try (XContentParser parser = createXContentParserFromRegistry(xContentRegistry, gr.getSourceAsBytesRef())) {
                                 ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
                                 MLModel mlModel = MLModel.parse(parser, null);
                                 listener.onResponse(mlModel);

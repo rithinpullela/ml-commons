@@ -116,7 +116,7 @@ public class StreamingWrapper {
     ) {
         if (isStreaming) {
             // Send token usage BEFORE completion chunk in streaming mode
-            if (verbose && tokenTracker != null && tokenTracker.hasUsage()) {
+            if (tokenTracker != null && tokenTracker.hasUsage()) {
                 try {
                     Map<String, Object> tokenUsageMap = tokenTracker.toOutputMap();
                     List<ModelTensor> tokenTensors = new ArrayList<>();
@@ -129,15 +129,16 @@ public class StreamingWrapper {
                         tokenTensors.add(ModelTensor.builder().name("parent_interaction_id").result(parentInteractionId).build());
                     }
 
-                    // Add token usage tensor
-                    tokenTensors.add(
-                        ModelTensor.builder()
-                            .name("token_usage")
-                            .dataAsMap(tokenUsageMap)
-                            .build()
-                    );
+                    // Send as "response" tensor so RestMLExecuteStreamAction recognizes it
+                    Map<String, Object> tokenResponseData = new java.util.LinkedHashMap<>();
+                    tokenResponseData.put("content", StringUtils.toJson(tokenUsageMap));
+                    tokenResponseData.put("is_last", false);
+                    tokenResponseData.put("token_usage", tokenUsageMap);
 
-                    ModelTensorOutput tokenOutput = ModelTensorOutput.builder()
+                    tokenTensors.add(ModelTensor.builder().name("response").dataAsMap(tokenResponseData).build());
+
+                    ModelTensorOutput tokenOutput = ModelTensorOutput
+                        .builder()
                         .mlModelOutputs(List.of(ModelTensors.builder().mlModelTensors(tokenTensors).build()))
                         .build();
 
@@ -164,9 +165,26 @@ public class StreamingWrapper {
             // Send final completion chunk with is_last=true
             sendCompletionChunk(sessionId, parentInteractionId);
 
+            // Close the stream — the handler defers stream completion to here
+            try {
+                channel.completeStream();
+            } catch (Exception e) {
+                log.warn("Failed to complete stream: {}", e.getMessage());
+            }
+
             listener.onResponse("Streaming completed");
         } else {
-            returnFinalResponse(sessionId, listener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer, tokenTracker, tenantId);
+            returnFinalResponse(
+                sessionId,
+                listener,
+                parentInteractionId,
+                verbose,
+                cotModelTensors,
+                additionalInfo,
+                finalAnswer,
+                tokenTracker,
+                tenantId
+            );
         }
     }
 
