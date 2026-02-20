@@ -109,6 +109,74 @@ public class AgentTokenTracker {
     }
 
     /**
+     * Merges pre-aggregated token usage data from a sub-agent response.
+     * The sub-agent (e.g., Chat/ReAct executor) has already tracked its own tokens
+     * and returns them as aggregated per_turn_usage and per_model_usage.
+     *
+     * @param tokenUsageMap the token_usage dataAsMap from the sub-agent response tensor
+     */
+    @SuppressWarnings("unchecked")
+    public void mergeSubAgentUsage(Map<String, Object> tokenUsageMap) {
+        if (tokenUsageMap == null) {
+            return;
+        }
+
+        // Merge per-turn usage: re-number turns sequentially
+        Object perTurnObj = tokenUsageMap.get("per_turn_usage");
+        if (perTurnObj instanceof List) {
+            List<Map<String, Object>> subTurns = (List<Map<String, Object>>) perTurnObj;
+            for (Map<String, Object> subTurn : subTurns) {
+                turnCounter++;
+                Map<String, Object> mergedTurn = new HashMap<>(subTurn);
+                mergedTurn.put("turn", turnCounter);
+                perTurnUsage.add(mergedTurn);
+            }
+        }
+
+        // Merge per-model usage: aggregate into existing model data
+        Object perModelObj = tokenUsageMap.get("per_model_usage");
+        if (perModelObj instanceof List) {
+            List<Map<String, Object>> subModels = (List<Map<String, Object>>) perModelObj;
+            for (Map<String, Object> subModel : subModels) {
+                String modelId = (String) subModel.get("model_id");
+                if (modelId == null) {
+                    continue;
+                }
+
+                String modelUrl = (String) subModel.getOrDefault("model_url", modelId);
+                String modelName = (String) subModel.getOrDefault("model_name", modelId);
+
+                TokenUsage subUsage = TokenUsage
+                    .builder()
+                    .inputTokens(getLongFromMap(subModel, "input_tokens"))
+                    .outputTokens(getLongFromMap(subModel, "output_tokens"))
+                    .totalTokens(getLongFromMap(subModel, "total_tokens"))
+                    .cacheReadInputTokens(getLongFromMap(subModel, "cache_read_input_tokens"))
+                    .cacheCreationInputTokens(getLongFromMap(subModel, "cache_creation_input_tokens"))
+                    .reasoningTokens(getLongFromMap(subModel, "reasoning_tokens"))
+                    .build();
+
+                int subCallCount = subModel.containsKey("call_count") ? ((Number) subModel.get("call_count")).intValue() : 1;
+
+                if (!modelMetadataMap.containsKey(modelId)) {
+                    modelMetadataMap.put(modelId, new ModelMetadata(modelUrl, modelName));
+                }
+
+                ModelMetadata metadata = modelMetadataMap.getOrDefault(modelId, new ModelMetadata(modelUrl, modelName));
+                perModelUsage.computeIfAbsent(modelId, k -> new ModelUsageAggregation(metadata)).mergeAggregated(subUsage, subCallCount);
+            }
+        }
+    }
+
+    private static Long getLongFromMap(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return null;
+    }
+
+    /**
      * Checks if any token usage has been recorded
      *
      * @return true if at least one turn has been recorded
@@ -134,6 +202,11 @@ public class AgentTokenTracker {
         public void addUsage(TokenUsage usage) {
             this.aggregatedUsage = this.aggregatedUsage.addTokens(usage);
             this.callCount++;
+        }
+
+        public void mergeAggregated(TokenUsage aggregatedUsage, int callCount) {
+            this.aggregatedUsage = this.aggregatedUsage.addTokens(aggregatedUsage);
+            this.callCount += callCount;
         }
 
         public TokenUsage getAggregatedUsage() {
