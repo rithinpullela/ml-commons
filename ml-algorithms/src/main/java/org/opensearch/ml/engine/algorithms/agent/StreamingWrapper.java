@@ -132,9 +132,34 @@ public class StreamingWrapper {
 
             listener.onResponse("Streaming completed");
         } else {
-            // For non-streaming, add token usage tensor to the response directly
+            // For non-streaming, add token usage tensor to the response.
+            // verbose=true uses cotModelTensors directly, so add there.
+            // verbose=false uses a separate finalModelTensors list, so we intercept the
+            // response and append the token usage tensor to ensure it's always included.
             AgentUtils.addTokenUsageTensor(cotModelTensors, tokenTracker, tenantId);
-            returnFinalResponse(sessionId, listener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer);
+            if (verbose || tokenTracker == null || !tokenTracker.hasUsage()) {
+                returnFinalResponse(sessionId, listener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer);
+            } else {
+                // Wrap listener to append token usage tensor to non-verbose response
+                ActionListener<Object> wrappedListener = ActionListener.wrap(response -> {
+                    if (response instanceof ModelTensorOutput) {
+                        ModelTensorOutput output = (ModelTensorOutput) response;
+                        Map<String, Object> tokenUsageMap = tokenTracker.toOutputMap();
+                        output
+                            .getMlModelOutputs()
+                            .add(
+                                ModelTensors
+                                    .builder()
+                                    .mlModelTensors(
+                                        List.of(ModelTensor.builder().name(AgentTokenTracker.TOKEN_USAGE).dataAsMap(tokenUsageMap).build())
+                                    )
+                                    .build()
+                            );
+                    }
+                    listener.onResponse(response);
+                }, listener::onFailure);
+                returnFinalResponse(sessionId, wrappedListener, parentInteractionId, verbose, cotModelTensors, additionalInfo, finalAnswer);
+            }
         }
     }
 

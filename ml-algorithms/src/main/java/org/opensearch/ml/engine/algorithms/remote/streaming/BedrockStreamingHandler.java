@@ -198,8 +198,7 @@ public class BedrockStreamingHandler extends BaseStreamingHandler {
                 if (currentState.get() == StreamState.AWAITING_COMPLETION) {
                     // All paths converge here: Metadata (token usage) has been captured.
                     // Notify agent runner with response, or close stream for predict.
-                    onStreamComplete(listener, isStreamClosed, toolName, toolInput, toolUseId,
-                        accumulatedContent, tokenUsage);
+                    onStreamComplete(listener, isStreamClosed, toolName, toolInput, toolUseId, accumulatedContent, tokenUsage);
                 } else {
                     // Safety net: unexpected early completion (e.g., error during streaming)
                     sendCompletionResponse(isStreamClosed, listener);
