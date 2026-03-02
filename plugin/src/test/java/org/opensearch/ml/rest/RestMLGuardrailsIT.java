@@ -123,7 +123,7 @@ public class RestMLGuardrailsIT extends MLCommonsRestTestCase {
 
     public void testPredictRemoteModelSuccess() throws IOException, InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         Response response = createConnector(completionModelConnectorEntity);

@@ -212,7 +212,7 @@ public class RestMLInferenceSearchRequestProcessorIT extends MLCommonsRestTestCa
      */
     public void testMLInferenceProcessorRemoteModelRewriteQueryString() throws Exception {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String createPipelineRequestBody = "{\n"
@@ -267,7 +267,7 @@ public class RestMLInferenceSearchRequestProcessorIT extends MLCommonsRestTestCa
      */
     public void testMLInferenceProcessorRemoteModelRewriteQueryStringWithSearchExtension() throws Exception {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String createPipelineRequestBody = "{\n"

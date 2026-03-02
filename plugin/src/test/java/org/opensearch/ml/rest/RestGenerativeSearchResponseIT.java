@@ -60,7 +60,7 @@ public class RestGenerativeSearchResponseIT extends MLCommonsRestTestCase {
 
     @Before
     public void setup() throws IOException, InterruptedException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
 
@@ -83,7 +83,7 @@ public class RestGenerativeSearchResponseIT extends MLCommonsRestTestCase {
 
     @After
     public void cleanup() throws IOException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
 
@@ -104,7 +104,7 @@ public class RestGenerativeSearchResponseIT extends MLCommonsRestTestCase {
 
     @Test
     public void testGenerativeSearchResponse_WithExtBlock() throws IOException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
 
@@ -159,7 +159,7 @@ public class RestGenerativeSearchResponseIT extends MLCommonsRestTestCase {
 
     @Test
     public void testGenerativeSearchResponse_WithSearchTemplate() throws IOException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
 

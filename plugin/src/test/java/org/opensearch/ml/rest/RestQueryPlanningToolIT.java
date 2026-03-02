@@ -59,7 +59,7 @@ public class RestQueryPlanningToolIT extends MLCommonsRestTestCase {
     @Before
     public void setup() throws IOException, InterruptedException {
         ingestIrisIndexData();
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         queryPlanningModelId = registerQueryPlanningModel();
@@ -72,7 +72,7 @@ public class RestQueryPlanningToolIT extends MLCommonsRestTestCase {
 
     @Test
     public void testAgentWithQueryPlanningTool_DefaultPrompt() throws IOException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String agentName = "Test_QueryPlanningAgent_DefaultPrompt";
@@ -97,7 +97,7 @@ public class RestQueryPlanningToolIT extends MLCommonsRestTestCase {
 
     @Test
     public void testAgentWithQueryPlanningTool_SearchTemplates() throws IOException {
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
 

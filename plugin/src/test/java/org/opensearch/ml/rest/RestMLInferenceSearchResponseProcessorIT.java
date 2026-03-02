@@ -502,7 +502,7 @@ public class RestMLInferenceSearchResponseProcessorIT extends MLCommonsRestTestC
      */
     public void testMLInferenceProcessorRemoteModelNestedListField() throws Exception {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String createPipelineRequestBody = "{\n"
@@ -557,7 +557,7 @@ public class RestMLInferenceSearchResponseProcessorIT extends MLCommonsRestTestC
      */
     public void testMLInferenceProcessorRemoteModelObjectField() throws Exception {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String createPipelineRequestBody = "{\n"

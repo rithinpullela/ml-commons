@@ -221,7 +221,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
 
     public void testPredictWithAutoDeployAndTTL_RemoteModel() throws IOException, InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             System.out.println("OPENAI_KEY is null");
             return;
         }
@@ -267,7 +267,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
         throws IOException,
         InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         Response response = createConnector(completionModelConnectorEntity);
@@ -334,7 +334,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
     ) throws IOException,
         InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         Response response = createConnector(this.getConnectorBodyBySkipValidatingMissingParameter(testCase));
@@ -392,7 +392,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
 
     public void testOpenAIChatCompletionModel() throws IOException, InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String entity = "{\n"
@@ -462,7 +462,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
     @Ignore
     public void testOpenAIEditsModel() throws IOException, InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String entity = "{\n"
@@ -534,7 +534,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
     @Ignore
     public void testOpenAIModerationsModel() throws IOException, InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String entity = "{\n"
@@ -618,7 +618,7 @@ public class RestMLRemoteInferenceIT extends MLCommonsRestTestCase {
         throws IOException,
         InterruptedException {
         // Skip test if key is null
-        if (OPENAI_KEY == null) {
+        if (OPENAI_KEY == null || !isServiceReachable("api.openai.com")) {
             return;
         }
         String entity = "{\n"
