@@ -242,7 +242,256 @@ This schema is used by LLM-based agents (e.g., `conversational` agents) to under
 
 ---
 
-## 6. Limitations and Future Work
+## 6. LLM-Assisted Parameter Auto-Generation
+
+### 6.1 Motivation
+
+Creating a custom tool requires manually defining every parameter — name, type, description, and whether it's required. For a customer with 20+ templates, this is tedious and error-prone, especially since the template already implicitly contains this information in its Mustache variables and DSL structure.
+
+To reduce setup friction, users can optionally provide a `model_id` during tool creation. The system will fetch the stored template, extract parameters programmatically, call the LLM to infer types and descriptions, and store the generated params alongside the tool.
+
+### 6.2 Interface
+
+**With `model_id` (auto-generate params):**
+
+```json
+POST /_plugins/_ml/tools/_create
+{
+  "name": "ProductSearchTool",
+  "description": "Search products by category, brand, price, and color.",
+  "type": "search_template",
+  "search_template_name": "product_search_v2",
+  "index": "products",
+  "model_id": "haiku-model-id"
+}
+```
+
+**With `params` (manual — existing behavior, unchanged):**
+
+```json
+POST /_plugins/_ml/tools/_create
+{
+  "name": "ProductSearchTool",
+  "description": "Search products by category, brand, price, and color.",
+  "type": "search_template",
+  "search_template_name": "product_search_v2",
+  "index": "products",
+  "params": {
+    "category":  { "type": "string",  "description": "Product category", "required": true },
+    "price_max": { "type": "number",  "description": "Maximum price",    "required": false }
+  }
+}
+```
+
+**Validation:**
+
+| Field provided | Behavior |
+|---|---|
+| `params` only | Manual — user defines all param schemas (existing behavior) |
+| `model_id` only | Auto — params extracted from template + LLM |
+| Both `params` and `model_id` | Error: `Cannot specify both 'params' and 'model_id'. Use one or the other.` |
+| Neither | Error: `Either 'params' or 'model_id' is required.` |
+
+**Response includes generated params** so the user can immediately review:
+
+```json
+{
+  "tool_id": "abc123",
+  "name": "ProductSearchTool",
+  "params": {
+    "category":  { "type": "string",  "description": "Product category to match against the category field", "required": true },
+    "color":     { "type": "string",  "description": "Product color for term filtering",                     "required": false },
+    "price_max": { "type": "float",   "description": "Maximum price in USD for range filtering",             "required": false }
+  }
+}
+```
+
+If the LLM gets something wrong, the user corrects it via `PUT /_plugins/_ml/tools/{tool_id}`.
+
+### 6.3 Two-Phase Extraction: Programmatic + LLM
+
+Parameter extraction is split into two phases. Phase 1 is deterministic (no LLM needed). Phase 2 uses the LLM only for what requires semantic understanding.
+
+#### Phase 1: Programmatic Extraction (Server-Side Java)
+
+Parse the Mustache template source string to extract:
+
+1. **Variable names** — scan for `{{variable_name}}` patterns, excluding section markers (`{{#`, `{{/`, `{{^`)
+2. **Required vs. optional** — determined by template structure:
+   - A variable that appears ONLY inside a conditional section (`{{#var}}...{{var}}...{{/var}}`) is **optional**
+   - A variable that appears outside any conditional section is **required**
+   - A variable with an inverted section default (`{{^var}}default_value{{/var}}`) is **optional**
+
+**Example:**
+
+```
+Template: {"must":[{"match":{"title":"{{query_text}}"}}]{{#genre}},{"filter":[{"term":{"genre":"{{genre}}"}}]}{{/genre}}},"size":{{result_size}}}
+
+Variables found:  [query_text, genre, result_size]
+Sections found:   [genre]
+
+query_text  → appears outside all sections   → required: true
+genre       → appears only inside {{#genre}} → required: false
+result_size → appears outside all sections   → required: true
+```
+
+This logic is fully deterministic — no LLM involved, no hallucination risk.
+
+#### Phase 2: LLM-Assisted Type and Description Inference
+
+The LLM receives the template source and the pre-extracted variable list, and infers `type` and `description` for each.
+
+**Prompt:**
+
+```
+You are analyzing an OpenSearch Mustache search template to determine parameter types and descriptions.
+
+## Template Source
+{template_source}
+
+## Parameters to Annotate
+The following parameters were extracted from the template. For each one, determine its type and write a description.
+
+Parameters: {extracted_variable_names}
+
+## Instructions
+
+For each parameter, determine:
+
+1. **type**: Infer from how the parameter is used in the query DSL:
+   - "string" — used in match, term, or text field contexts (e.g., "match": {"field": "{{var}}"})
+   - "integer" — used as a bare numeric value without quotes (e.g., "size": {{var}}) or in integer contexts
+   - "float" — used in range queries with decimal values, boost values, or scores
+   - "double" — used for high-precision numeric values
+   - "boolean" — used in boolean contexts (e.g., "track_total_hits": {{var}})
+   - "long" — used for timestamps, epoch values, or large numeric IDs
+   - Default to "string" if the usage context is ambiguous
+
+2. **description**: A clear, concise description of what this parameter controls. Base it on:
+   - The field name it maps to in the index
+   - The query clause it appears in (match, term, range, filter, bool, etc.)
+   - Its role in the query (filtering, scoring, pagination, etc.)
+
+## Important
+- Do NOT add or remove parameters — annotate exactly the list provided
+- Do NOT determine "required" — that is already handled separately
+
+Return ONLY a valid JSON object in this exact format, no other text:
+{
+  "params": {
+    "parameter_name": {
+      "type": "string|integer|long|float|double|boolean",
+      "description": "description of the parameter"
+    }
+  }
+}
+```
+
+**Why this split works:**
+
+| Aspect | Phase 1 (Programmatic) | Phase 2 (LLM) |
+|--------|----------------------|---------------|
+| Variable names | Regex extraction | N/A |
+| Required/optional | Section nesting analysis | N/A |
+| Type | N/A | DSL context inference |
+| Description | N/A | Semantic understanding |
+| Reliability | 100% deterministic | Best-effort, user-reviewable |
+
+The LLM's job is reduced to type inference and description writing — both of which it's good at and both of which are easily reviewable/correctable via `PUT`.
+
+### 6.4 Creation Flow with Auto-Generation
+
+```
+POST /_plugins/_ml/tools/_create (with model_id)
+  │
+  ├→ 1. Validate tenant, name uniqueness, name format (existing)
+  │
+  ├→ 2. Fetch stored script via GetStoredScriptRequest
+  │     └→ Extract template source string
+  │
+  ├→ 3. Phase 1: Programmatic extraction
+  │     ├→ Extract variable names from template
+  │     └→ Determine required/optional from section nesting
+  │
+  ├→ 4. Phase 2: LLM call
+  │     ├→ Build prompt with template source + variable names
+  │     ├→ Call model via MachineLearningNodeClient.predict()
+  │     └→ Parse JSON response → type + description per param
+  │
+  ├→ 5. Merge Phase 1 + Phase 2
+  │     └→ Combine: {name, type (LLM), description (LLM), required (programmatic)}
+  │
+  └→ 6. Store custom tool with generated params (existing indexing flow)
+```
+
+### 6.5 Prompt Walkthrough with Real Template
+
+**Input template** (Shakespeare search):
+```
+{"query":{"bool":{"must":[{"match":{"title":"{{query_text}}"}}]{{#genre}},
+"filter":[{"term":{"genre":"{{genre}}"}}]{{/genre}}}},"size":{{result_size}}}
+```
+
+**Phase 1 output:**
+```
+query_text  → required: true
+genre       → required: false
+result_size → required: true
+```
+
+**Phase 2 prompt sends:**
+```
+Parameters to Annotate: [query_text, genre, result_size]
+```
+
+**Phase 2 LLM response:**
+```json
+{
+  "params": {
+    "query_text":  { "type": "string",  "description": "Text to match against the title field using full-text search" },
+    "genre":       { "type": "string",  "description": "Genre keyword to filter results by (e.g., tragedy, comedy)" },
+    "result_size": { "type": "integer", "description": "Maximum number of search results to return" }
+  }
+}
+```
+
+**Merged final params stored:**
+```json
+{
+  "query_text":  { "type": "string",  "description": "Text to match against the title field using full-text search", "required": true },
+  "genre":       { "type": "string",  "description": "Genre keyword to filter results by (e.g., tragedy, comedy)",   "required": false },
+  "result_size": { "type": "integer", "description": "Maximum number of search results to return",                   "required": true }
+}
+```
+
+### 6.6 Design Decisions
+
+#### 6.6.1 JSON Prompt vs. Forced Tool Call
+
+**Decision**: Use a JSON prompt for the LLM call, not forced tool calls (`tool_choice: "required"`).
+
+**Alternatives considered**:
+- Define a function schema for `extract_parameters` and force the LLM to call it via `tool_choice: "required"`
+
+**Rationale**: The creation flow makes a standalone LLM call via `MachineLearningNodeClient.predict()`, not through the agent loop. The function calling infrastructure (`FunctionCalling` interface, `OpenaiV1ChatCompletionsFunctionCalling`, etc.) is tightly coupled to `MLChatAgentRunner` and the ReAct loop. Reusing it for a one-shot call would require significant refactoring.
+
+A well-structured JSON prompt is sufficient for this use case because:
+- The output schema is simple and fixed (a flat map of param names to type+description)
+- The response is validated and parsed server-side — malformed JSON triggers an error
+- This is a creation-time operation, not a latency-critical query-time call
+- The user reviews and can correct the output via `PUT`
+
+If reliability becomes an issue, forced tool calls can be added as a future enhancement by making the function calling infrastructure available outside the agent loop.
+
+#### 6.6.2 `model_id` and `params` Are Mutually Exclusive
+
+**Decision**: Reject requests that provide both `model_id` and `params`.
+
+**Rationale**: If the user provides manual params, auto-generation is unnecessary. If they want auto-generation, manual params would be overwritten. Mutual exclusion eliminates ambiguity about which source of truth wins.
+
+---
+
+## 7. Limitations and Future Work
 
 ### Current Limitations
 

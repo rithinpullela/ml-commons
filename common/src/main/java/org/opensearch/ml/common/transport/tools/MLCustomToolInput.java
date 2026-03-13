@@ -31,6 +31,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
     public static final String TOOL_TYPE_FIELD = "type";
     public static final String SEARCH_TEMPLATE_NAME_FIELD = "search_template_name";
     public static final String PARAMS_FIELD = "params";
+    public static final String MODEL_ID_FIELD = "model_id";
     public static final String CREATE_TIME_FIELD = CommonValue.CREATE_TIME_FIELD;
     public static final String LAST_UPDATE_TIME_FIELD = CommonValue.LAST_UPDATE_TIME_FIELD;
 
@@ -39,6 +40,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
     private String type;
     private String searchTemplateName;
     private Map<String, Object> params;
+    private String modelId;
     @Setter
     private String tenantId;
     private Instant createTime;
@@ -51,6 +53,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         String type,
         String searchTemplateName,
         Map<String, Object> params,
+        String modelId,
         String tenantId,
         Instant createTime,
         Instant lastUpdateTime,
@@ -72,12 +75,19 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
             if (searchTemplateName == null) {
                 throw new IllegalArgumentException("Search template name is required");
             }
+            if (params != null && modelId != null) {
+                throw new IllegalArgumentException(
+                    "Cannot specify both 'params' and 'model_id'. Use 'params' for manual parameter "
+                        + "definitions or 'model_id' for LLM-assisted auto-generation, but not both."
+                );
+            }
         }
         this.name = name;
         this.description = description;
         this.type = type;
         this.searchTemplateName = searchTemplateName;
         this.params = params;
+        this.modelId = modelId;
         this.tenantId = tenantId;
         this.createTime = createTime;
         this.lastUpdateTime = lastUpdateTime;
@@ -91,6 +101,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         if (input.readBoolean()) {
             params = input.readMap();
         }
+        modelId = input.readOptionalString();
         tenantId = input.readOptionalString();
         createTime = input.readOptionalInstant();
         lastUpdateTime = input.readOptionalInstant();
@@ -106,6 +117,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         String type = null;
         String searchTemplateName = null;
         Map<String, Object> params = null;
+        String modelId = null;
         String tenantId = null;
         Instant createTime = null;
         Instant lastUpdateTime = null;
@@ -131,6 +143,9 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
                 case PARAMS_FIELD:
                     params = parser.map();
                     break;
+                case MODEL_ID_FIELD:
+                    modelId = parser.text();
+                    break;
                 case TENANT_ID_FIELD:
                     tenantId = parser.textOrNull();
                     break;
@@ -152,6 +167,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
             .type(type)
             .searchTemplateName(searchTemplateName)
             .params(params)
+            .modelId(modelId)
             .tenantId(tenantId)
             .createTime(createTime)
             .lastUpdateTime(lastUpdateTime)
@@ -176,6 +192,9 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         }
         if (this.params != null) {
             builder.field(PARAMS_FIELD, this.params);
+        }
+        if (modelId != null) {
+            builder.field(MODEL_ID_FIELD, modelId);
         }
         if (tenantId != null) {
             builder.field(TENANT_ID_FIELD, tenantId);
@@ -202,6 +221,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         } else {
             output.writeBoolean(false);
         }
+        output.writeOptionalString(modelId);
         output.writeOptionalString(tenantId);
         output.writeOptionalInstant(createTime);
         output.writeOptionalInstant(lastUpdateTime);

@@ -72,10 +72,6 @@ public class RestMLUpdateCustomToolAction extends BaseRestHandler {
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
         MLCustomToolInput updateContent = MLCustomToolInput.parse(parser, true);
         String tenantId = getTenantID(mlFeatureEnabledSetting.isMultiTenancyEnabled(), request);
-        return MLUpdateCustomToolRequest.builder()
-            .toolId(toolId)
-            .updateContent(updateContent)
-            .tenantId(tenantId)
-            .build();
+        return MLUpdateCustomToolRequest.builder().toolId(toolId).updateContent(updateContent).tenantId(tenantId).build();
     }
 }

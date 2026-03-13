@@ -7,8 +7,6 @@ package org.opensearch.ml.common;
 
 import static org.opensearch.ml.common.CommonValue.MCP_SESSION_MANAGEMENT_INDEX;
 import static org.opensearch.ml.common.CommonValue.MCP_TOOLS_INDEX;
-import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX;
-import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_AGENT_INDEX;
 import static org.opensearch.ml.common.CommonValue.ML_AGENT_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_CONFIG_INDEX;
@@ -17,6 +15,8 @@ import static org.opensearch.ml.common.CommonValue.ML_CONNECTOR_INDEX;
 import static org.opensearch.ml.common.CommonValue.ML_CONNECTOR_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_CONTROLLER_INDEX;
 import static org.opensearch.ml.common.CommonValue.ML_CONTROLLER_INDEX_MAPPING_PATH;
+import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX;
+import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_INDEX_INSIGHT_CONFIG_INDEX;
 import static org.opensearch.ml.common.CommonValue.ML_INDEX_INSIGHT_CONFIG_INDEX_MAPPING_PATH;
 import static org.opensearch.ml.common.CommonValue.ML_INDEX_INSIGHT_STORAGE_INDEX;

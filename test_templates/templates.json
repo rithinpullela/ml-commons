@@ -1,0 +1,443 @@
+{
+  "templates": [
+    {
+      "id": "t01_simple_match",
+      "description": "Basic match query, two bare variables at root scope",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"size\":{{result_size}}}",
+      "expected": {
+        "query_text":  {"type": "string", "required": true},
+        "result_size": {"type": "number", "required": true}
+      }
+    },
+    {
+      "id": "t02_inverted_defaults",
+      "description": "Inverted sections providing default values for from/size",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "from":       {"type": "number", "required": false, "default": "0"},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t03_tojson_array",
+      "description": "toJson helper for array detection + section guard for optional filter",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#tags}},\"filter\":[{\"terms\":{\"tags\":{{#toJson}}tags{{/toJson}}}}]{{/tags}}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "tags":       {"type": "array",  "required": false},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t04_multi_match_fields",
+      "description": "multi_match with toJson fields array and string default for match_type",
+      "source": "{\"query\":{\"multi_match\":{\"query\":\"{{query_text}}\",\"fields\":{{#toJson}}fields{{/toJson}},\"type\":\"{{#match_type}}{{match_type}}{{/match_type}}{{^match_type}}best_fields{{/match_type}}\"}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "fields":     {"type": "array",  "required": true},
+        "match_type": {"type": "string", "required": false, "default": "best_fields"},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t05_self_guarding_sections",
+      "description": "Self-guarding sections: {{#category}}...{{category}}...{{/category}} should be optional",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#category}},\"filter\":[{\"term\":{\"category\":\"{{category}}\"}}]{{/category}}{{#brand}},\"must\":[{\"term\":{\"brand\":\"{{brand}}\"}}]{{/brand}}{{#min_rating}},\"filter\":[{\"range\":{\"rating\":{\"gte\":{{min_rating}}}}}]{{/min_rating}}}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}",
+      "expected": {
+        "query_text":  {"type": "string", "required": true},
+        "category":    {"type": "string", "required": false},
+        "brand":       {"type": "string", "required": false},
+        "min_rating":  {"type": "number", "required": false},
+        "from":        {"type": "number", "required": false, "default": "0"},
+        "size":        {"type": "number", "required": false, "default": "20"}
+      }
+    },
+    {
+      "id": "t06_boolean_guard",
+      "description": "Boolean guard controlling a nested block with its own variables",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#price_filter}},\"filter\":[{\"range\":{\"price\":{\"gte\":{{min_price}},\"lte\":{{max_price}}}}}]{{/price_filter}}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":    {"type": "string",  "required": true},
+        "price_filter":  {"type": "boolean", "required": false},
+        "min_price":     {"type": "number",  "required": false},
+        "max_price":     {"type": "number",  "required": false},
+        "size":          {"type": "number",  "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t07_source_sort_defaults",
+      "description": "Source filtering with toJson, sort with string defaults",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"_source\":{{#toJson}}source_fields{{/toJson}},\"sort\":[{\"{{#sort_field}}{{sort_field}}{{/sort_field}}{{^sort_field}}_score{{/sort_field}}\":{\"order\":\"{{#sort_order}}{{sort_order}}{{/sort_order}}{{^sort_order}}desc{{/sort_order}}\"}}],\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":    {"type": "string", "required": true},
+        "source_fields": {"type": "array",  "required": true},
+        "sort_field":    {"type": "string", "required": false, "default": "_score"},
+        "sort_order":    {"type": "string", "required": false, "default": "desc"},
+        "size":          {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t08_agg_boolean_toggle",
+      "description": "Aggregation with boolean toggle for sub-aggregation",
+      "source": "{\"size\":0,\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"aggs\":{\"by_category\":{\"terms\":{\"field\":\"{{agg_field}}\",\"size\":{{#agg_size}}{{agg_size}}{{/agg_size}}{{^agg_size}}10{{/agg_size}}}{{#include_stats}},\"aggs\":{\"price_stats\":{\"stats\":{\"field\":\"price\"}}}{{/include_stats}}}}}",
+      "expected": {
+        "query_text":    {"type": "string",  "required": true},
+        "agg_field":     {"type": "string",  "required": true},
+        "agg_size":      {"type": "number",  "required": false, "default": "10"},
+        "include_stats": {"type": "boolean", "required": false}
+      }
+    },
+    {
+      "id": "t09_highlight_boost",
+      "description": "Highlight query with numeric boost default and minimum_should_match",
+      "source": "{\"query\":{\"bool\":{\"should\":[{\"match\":{\"title\":{\"query\":\"{{query_text}}\",\"boost\":{{#title_boost}}{{title_boost}}{{/title_boost}}{{^title_boost}}2{{/title_boost}}}}},{\"match\":{\"description\":\"{{query_text}}\"}}],\"minimum_should_match\":{{#min_match}}{{min_match}}{{/min_match}}{{^min_match}}1{{/min_match}}}},\"highlight\":{\"fields\":{\"title\":{},\"description\":{}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":   {"type": "string", "required": true},
+        "title_boost":  {"type": "number", "required": false, "default": "2"},
+        "min_match":    {"type": "number", "required": false, "default": "1"},
+        "size":         {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t10_kitchen_sink",
+      "description": "Kitchen sink: 3x toJson arrays, inverted defaults, section guards",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"multi_match\":{\"query\":\"{{query_text}}\",\"fields\":{{#toJson}}search_fields{{/toJson}}}}]{{#categories}},\"filter\":[{\"terms\":{\"category\":{{#toJson}}categories{{/toJson}}}}]{{/categories}}{{#exclude_ids}},\"must_not\":[{\"ids\":{\"values\":{{#toJson}}exclude_ids{{/toJson}}}}]{{/exclude_ids}}}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}25{{/size}}}",
+      "expected": {
+        "query_text":    {"type": "string", "required": true},
+        "search_fields": {"type": "array",  "required": true},
+        "categories":    {"type": "array",  "required": false},
+        "exclude_ids":   {"type": "array",  "required": false},
+        "from":          {"type": "number", "required": false, "default": "0"},
+        "size":          {"type": "number", "required": false, "default": "25"}
+      }
+    },
+    {
+      "id": "t11_nested_path",
+      "description": "Nested query with inner_hits and path variable",
+      "source": "{\"query\":{\"nested\":{\"path\":\"{{nested_path}}\",\"query\":{\"match\":{\"{{nested_path}}.text\":\"{{query_text}}\"}},\"inner_hits\":{\"size\":{{#inner_size}}{{inner_size}}{{/inner_size}}{{^inner_size}}3{{/inner_size}}}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "nested_path": {"type": "string", "required": true},
+        "query_text":  {"type": "string", "required": true},
+        "inner_size":  {"type": "number", "required": false, "default": "3"},
+        "size":        {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t12_function_score",
+      "description": "Function score with decay, self-guarding boost_mode and score_mode",
+      "source": "{\"query\":{\"function_score\":{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"functions\":[{\"gauss\":{\"{{decay_field}}\":{\"origin\":\"{{origin}}\",\"scale\":\"{{scale}}\",\"offset\":\"{{#offset}}{{offset}}{{/offset}}{{^offset}}0{{/offset}}\",\"decay\":{{#decay}}{{decay}}{{/decay}}{{^decay}}0.5{{/decay}}}}}],\"boost_mode\":\"{{#boost_mode}}{{boost_mode}}{{/boost_mode}}{{^boost_mode}}multiply{{/boost_mode}}\",\"score_mode\":\"{{#score_mode}}{{score_mode}}{{/score_mode}}{{^score_mode}}multiply{{/score_mode}}\"}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":  {"type": "string", "required": true},
+        "decay_field": {"type": "string", "required": true},
+        "origin":      {"type": "string", "required": true},
+        "scale":       {"type": "string", "required": true},
+        "offset":      {"type": "string", "required": false, "default": "0"},
+        "decay":       {"type": "number", "required": false, "default": "0.5"},
+        "boost_mode":  {"type": "string", "required": false, "default": "multiply"},
+        "score_mode":  {"type": "string", "required": false, "default": "multiply"},
+        "size":        {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t13_geo_distance",
+      "description": "Geo distance filter with self-guarding distance and unit defaults",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}],\"filter\":[{\"geo_distance\":{\"distance\":\"{{#distance}}{{distance}}{{/distance}}{{^distance}}10{{/distance}}{{#unit}}{{unit}}{{/unit}}{{^unit}}km{{/unit}}\",\"location\":{\"lat\":{{lat}},\"lon\":{{lon}}}}}]}},\"sort\":[{\"_geo_distance\":{\"location\":{\"lat\":{{lat}},\"lon\":{{lon}}},\"order\":\"asc\"}}],\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "distance":   {"type": "string", "required": false, "default": "10"},
+        "unit":       {"type": "string", "required": false, "default": "km"},
+        "lat":        {"type": "number", "required": true},
+        "lon":        {"type": "number", "required": true},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t14_multi_agg_pipeline",
+      "description": "Multiple aggs with a pipeline agg and boolean toggles",
+      "source": "{\"size\":0,\"query\":{\"match\":{\"category\":\"{{category}}\"}},\"aggs\":{\"date_hist\":{\"date_histogram\":{\"field\":\"{{date_field}}\",\"calendar_interval\":\"{{#interval}}{{interval}}{{/interval}}{{^interval}}month{{/interval}}\"},\"aggs\":{\"revenue\":{\"sum\":{\"field\":\"{{revenue_field}}\"}}{{#include_avg}},\"avg_price\":{\"avg\":{\"field\":\"{{price_field}}\"}}{{/include_avg}}}}{{#include_cumulative}},\"cumulative_revenue\":{\"cumulative_sum\":{\"buckets_path\":\"date_hist>revenue\"}}{{/include_cumulative}}}}",
+      "expected": {
+        "category":           {"type": "string",  "required": true},
+        "date_field":         {"type": "string",  "required": true},
+        "interval":           {"type": "string",  "required": false, "default": "month"},
+        "revenue_field":      {"type": "string",  "required": true},
+        "include_avg":        {"type": "boolean", "required": false},
+        "price_field":        {"type": "string",  "required": false},
+        "include_cumulative": {"type": "boolean", "required": false}
+      }
+    },
+    {
+      "id": "t15_knn_hybrid",
+      "description": "k-NN hybrid search with optional text query and rescore",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"knn\":{\"{{vector_field}}\":{\"vector\":{{#toJson}}query_vector{{/toJson}},\"k\":{{#k}}{{k}}{{/k}}{{^k}}10{{/k}}}}}]{{#text_query}},\"should\":[{\"match\":{\"{{text_field}}\":\"{{text_query}}\"}}]{{/text_query}}}},{{#rescore}}\"rescore\":{\"query\":{\"rescore_query\":{\"match_phrase\":{\"{{text_field}}\":\"{{text_query}}\"}},\"query_weight\":{{#query_weight}}{{query_weight}}{{/query_weight}}{{^query_weight}}0.7{{/query_weight}},\"rescore_query_weight\":{{#rescore_weight}}{{rescore_weight}}{{/rescore_weight}}{{^rescore_weight}}1.2{{/rescore_weight}}}},{{/rescore}}\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "vector_field":   {"type": "string",  "required": true},
+        "query_vector":   {"type": "array",   "required": true},
+        "k":              {"type": "number",  "required": false, "default": "10"},
+        "text_query":     {"type": "string",  "required": false},
+        "text_field":     {"type": "string",  "required": false},
+        "rescore":        {"type": "boolean", "required": false},
+        "query_weight":   {"type": "number",  "required": false, "default": "0.7"},
+        "rescore_weight": {"type": "number",  "required": false, "default": "1.2"},
+        "size":           {"type": "number",  "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t16_percolate",
+      "description": "Percolate query with dynamic document fields",
+      "source": "{\"query\":{\"percolate\":{\"field\":\"query\",\"document\":{\"title\":\"{{doc_title}}\",\"body\":\"{{doc_body}}\",\"price\":{{doc_price}},\"tags\":{{#toJson}}doc_tags{{/toJson}}}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "doc_title": {"type": "string", "required": true},
+        "doc_body":  {"type": "string", "required": true},
+        "doc_price": {"type": "number", "required": true},
+        "doc_tags":  {"type": "array",  "required": true},
+        "size":      {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t17_terms_lookup",
+      "description": "Terms lookup from another index with self-guarding routing",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}],\"filter\":[{\"terms\":{\"{{filter_field}}\":{\"index\":\"{{lookup_index}}\",\"id\":\"{{lookup_id}}\",\"path\":\"{{lookup_path}}\"{{#routing}},\"routing\":\"{{routing}}\"{{/routing}}}}}]}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":    {"type": "string", "required": true},
+        "filter_field":  {"type": "string", "required": true},
+        "lookup_index":  {"type": "string", "required": true},
+        "lookup_id":     {"type": "string", "required": true},
+        "lookup_path":   {"type": "string", "required": true},
+        "routing":       {"type": "string", "required": false},
+        "size":          {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t18_script_score",
+      "description": "Script score with inline painless script and params",
+      "source": "{\"query\":{\"script_score\":{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"script\":{\"source\":\"_score * doc['popularity'].value * params.weight\",\"params\":{\"weight\":{{#weight}}{{weight}}{{/weight}}{{^weight}}1.0{{/weight}}}}}},\"min_score\":{{#min_score}}{{min_score}}{{/min_score}}{{^min_score}}0{{/min_score}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "weight":     {"type": "number", "required": false, "default": "1.0"},
+        "min_score":  {"type": "number", "required": false, "default": "0"},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t19_collapse_cardinality",
+      "description": "Field collapsing with inner_hits and cardinality agg",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"collapse\":{\"field\":\"{{collapse_field}}\",\"inner_hits\":{\"name\":\"top_items\",\"size\":{{#inner_size}}{{inner_size}}{{/inner_size}}{{^inner_size}}3{{/inner_size}},\"sort\":[{\"{{#inner_sort}}{{inner_sort}}{{/inner_sort}}{{^inner_sort}}_score{{/inner_sort}}\":\"desc\"}]}},\"aggs\":{\"total_groups\":{\"cardinality\":{\"field\":\"{{collapse_field}}\"}}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text":      {"type": "string", "required": true},
+        "collapse_field":  {"type": "string", "required": true},
+        "inner_size":      {"type": "number", "required": false, "default": "3"},
+        "inner_sort":      {"type": "string", "required": false, "default": "_score"},
+        "from":            {"type": "number", "required": false, "default": "0"},
+        "size":            {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t20_massive_ecommerce",
+      "description": "Large e-commerce search: text query, filters, facets, sort, pagination, highlights",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"multi_match\":{\"query\":\"{{query_text}}\",\"fields\":{{#toJson}}search_fields{{/toJson}},\"type\":\"{{#match_type}}{{match_type}}{{/match_type}}{{^match_type}}cross_fields{{/match_type}}\"}}]{{#category}},\"filter\":[{\"term\":{\"category.keyword\":\"{{category}}\"}}]{{/category}}{{#brand}},\"filter\":[{\"term\":{\"brand.keyword\":\"{{brand}}\"}}]{{/brand}}{{#price_filter}},\"filter\":[{\"range\":{\"price\":{\"gte\":{{min_price}},\"lte\":{{max_price}}}}}]{{/price_filter}}{{#in_stock}},\"filter\":[{\"term\":{\"in_stock\":true}}]{{/in_stock}}{{#exclude_ids}},\"must_not\":[{\"ids\":{\"values\":{{#toJson}}exclude_ids{{/toJson}}}}]{{/exclude_ids}}}},\"aggs\":{\"categories\":{\"terms\":{\"field\":\"category.keyword\",\"size\":{{#facet_size}}{{facet_size}}{{/facet_size}}{{^facet_size}}20{{/facet_size}}}},\"brands\":{\"terms\":{\"field\":\"brand.keyword\",\"size\":{{#facet_size}}{{facet_size}}{{/facet_size}}{{^facet_size}}20{{/facet_size}}}},\"price_ranges\":{\"range\":{\"field\":\"price\",\"ranges\":[{\"to\":25},{\"from\":25,\"to\":50},{\"from\":50,\"to\":100},{\"from\":100}]}}},\"highlight\":{\"fields\":{\"title\":{},\"description\":{}}},\"sort\":[{\"{{#sort_field}}{{sort_field}}{{/sort_field}}{{^sort_field}}_score{{/sort_field}}\":{\"order\":\"{{#sort_order}}{{sort_order}}{{/sort_order}}{{^sort_order}}desc{{/sort_order}}\"}}],\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}",
+      "expected": {
+        "query_text":    {"type": "string",  "required": true},
+        "search_fields": {"type": "array",   "required": true},
+        "match_type":    {"type": "string",  "required": false, "default": "cross_fields"},
+        "category":      {"type": "string",  "required": false},
+        "brand":         {"type": "string",  "required": false},
+        "price_filter":  {"type": "boolean", "required": false},
+        "min_price":     {"type": "number",  "required": false},
+        "max_price":     {"type": "number",  "required": false},
+        "in_stock":      {"type": "boolean", "required": false},
+        "exclude_ids":   {"type": "array",   "required": false},
+        "facet_size":    {"type": "number",  "required": false, "default": "20"},
+        "sort_field":    {"type": "string",  "required": false, "default": "_score"},
+        "sort_order":    {"type": "string",  "required": false, "default": "desc"},
+        "from":          {"type": "number",  "required": false, "default": "0"},
+        "size":          {"type": "number",  "required": false, "default": "20"}
+      }
+    },
+
+    {"_comment": "=== Edge case tests (T21-T40) from subagent review ==="},
+
+    {
+      "id": "t21_join_delimiter",
+      "description": "join helper with explicit delimiter syntax (KNOWN LIMITATION: DefaultMustacheFactory mismatched tags)",
+      "source": "{\"query\":{\"match\":{\"status\":\"{{#join delimiter=','}}statuses{{/join}}\"}}}",
+      "expected_note": "Mustache library cannot match start tag 'join delimiter=...' with end tag 'join'. OpenSearch CustomMustacheFactory handles this differently. Expected to error.",
+      "expected_error": true,
+      "expected": {}
+    },
+    {
+      "id": "t22_join_bare",
+      "description": "Bare join helper without delimiter argument",
+      "source": "{\"query\":{\"match\":{\"tags\":\"{{#join}}tag_list{{/join}}\"}}}",
+      "expected": {
+        "tag_list": {"type": "array", "required": true}
+      }
+    },
+    {
+      "id": "t23_url_helper",
+      "description": "url helper — transparent pass-through, inner variable should be discovered",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{#url}}{{query_text}}{{/url}}\"}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true}
+      }
+    },
+    {
+      "id": "t24_no_variables",
+      "description": "Static template with no Mustache variables — should extract zero params",
+      "source": "{\"query\":{\"match_all\":{}},\"size\":10}",
+      "expected": {}
+    },
+    {
+      "id": "t25_dot_notation",
+      "description": "Dot-notation variables collapse to root name",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"name\":\"{{user.name}}\"}},{\"range\":{\"age\":{\"gte\":{{user.age}}}}}]}}}",
+      "expected": {
+        "user": {"type": "string", "required": true}
+      }
+    },
+    {
+      "id": "t26_same_var_two_contexts",
+      "description": "Same variable in quoted (string) and unquoted (number) context — first-seen wins",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{threshold}}\"}},\"min_score\":{{threshold}}}",
+      "expected": {
+        "threshold": {"type": "string", "required": true}
+      }
+    },
+    {
+      "id": "t27_var_as_json_key",
+      "description": "Variable used as a JSON object key (field name position)",
+      "source": "{\"query\":{\"term\":{\"{{field_name}}\":\"{{field_value}}\"}}}",
+      "expected": {
+        "field_name":  {"type": "string", "required": true},
+        "field_value": {"type": "string", "required": true}
+      }
+    },
+    {
+      "id": "t28_triple_stache",
+      "description": "Triple-stache {{{var}}} for unescaped output — may or may not be recognized",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{{raw_query}}}\"}}}",
+      "expected_note": "May produce 0 params if {{{var}}} uses an unhandled Code type",
+      "expected": {
+        "raw_query": {"type": "string", "required": true}
+      }
+    },
+    {
+      "id": "t29_dot_iterator",
+      "description": "Implicit iterator {{.}} inside section — section becomes boolean (known limitation)",
+      "source": "{\"query\":{\"terms\":{\"tags\":[\"{{#tag_list}}{{.}},{{/tag_list}}\"]}}}",
+      "expected_note": "tag_list only has {{.}} inside, so isSectionControllerOnly stays true -> boolean. Ideally array.",
+      "expected": {
+        "tag_list": {"type": "boolean", "required": false}
+      }
+    },
+    {
+      "id": "t30_deep_nesting",
+      "description": "3 levels of nesting — depth counter and required/optional at deep scope",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#filters}},\"filter\":[{{#price_range}}{\"range\":{\"price\":{\"gte\":{{#min}}{{min}}{{/min}}{{^min}}0{{/min}}}}}{{/price_range}}]{{/filters}}}}}",
+      "expected": {
+        "query_text":   {"type": "string",  "required": true},
+        "filters":      {"type": "boolean", "required": false},
+        "price_range":  {"type": "boolean", "required": false},
+        "min":          {"type": "number",  "required": false, "default": "0"}
+      }
+    },
+    {
+      "id": "t31_duplicate_inverted",
+      "description": "Same variable with two inverted sections with different defaults — last wins",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}},\"aggs\":{\"top\":{\"terms\":{\"field\":\"category\",\"size\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}}}}",
+      "expected_note": "collectInvertedSections iterates all NotIterableCode, last put wins -> default 20",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "size":       {"type": "number", "required": false, "default": "20"}
+      }
+    },
+    {
+      "id": "t32_special_var_names",
+      "description": "Variable names with underscores and numbers",
+      "source": "{\"query\":{\"match\":{\"{{field_1}}\":\"{{_query}}\"}},\"size\":{{result_2_count}}}",
+      "expected": {
+        "field_1":        {"type": "string", "required": true},
+        "_query":         {"type": "string", "required": true},
+        "result_2_count": {"type": "number", "required": true}
+      }
+    },
+    {
+      "id": "t33_only_helpers",
+      "description": "Template with only toJson helpers and self-guarding sections, no bare {{var}}",
+      "source": "{\"query\":{\"terms\":{\"tags\":{{#toJson}}tags{{/toJson}}}},\"_source\":{{#toJson}}fields{{/toJson}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}5{{/size}}}",
+      "expected": {
+        "tags":   {"type": "array",  "required": true},
+        "fields": {"type": "array",  "required": true},
+        "size":   {"type": "number", "required": false, "default": "5"}
+      }
+    },
+    {
+      "id": "t34_section_guarded_tojson",
+      "description": "Section guard wrapping toJson — {{#ids}}...{{#toJson}}ids{{/toJson}}...{{/ids}}",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#ids}},\"filter\":[{\"ids\":{\"values\":{{#toJson}}ids{{/toJson}}}}]{{/ids}}}}}",
+      "expected_note": "ids seen as section controller first, then toJson sets isArrayType=true. Required because toJson discovery sets appearsAtRootScope but not appearsInsideOwnSection.",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "ids":        {"type": "array",  "required": false}
+      }
+    },
+    {
+      "id": "t35_fallback_variable",
+      "description": "Inverted section with variable inside (fallback pattern) instead of literal",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{#primary}}{{primary}}{{/primary}}{{^primary}}{{fallback}}{{/primary}}\"}}}",
+      "expected_note": "primary is self-guarding -> optional. fallback is inside the inverted section which is a child of IterableCode(primary) at depth+1, so appearsAtRootScope is false -> required false.",
+      "expected": {
+        "primary":  {"type": "string", "required": false},
+        "fallback": {"type": "string", "required": false}
+      }
+    },
+    {
+      "id": "t36_comment_tags",
+      "description": "Mustache comment tags {{! comment }} should be ignored",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}}{{! pagination params follow }},\"size\":{{result_size}}}",
+      "expected": {
+        "query_text":  {"type": "string", "required": true},
+        "result_size": {"type": "number", "required": true}
+      }
+    },
+    {
+      "id": "t37_inverted_only",
+      "description": "Variable appears ONLY in inverted section — no ParamInfo created, default lost",
+      "source": "{\"query\":{\"match_all\":{}},\"size\":{{^size}}10{{/size}}}",
+      "expected_note": "size only in inverted section. collectInvertedSections finds it and walkCodes creates a ParamInfo as section controller -> boolean with default.",
+      "expected": {
+        "size": {"type": "boolean", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t38_mixed_helpers",
+      "description": "Multiple helper types in one template: toJson + join + url",
+      "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{#url}}{{query_text}}{{/url}}\"}}],\"filter\":[{\"terms\":{\"tags\":{{#toJson}}tags{{/toJson}}}},{\"match\":{\"categories\":\"{{#join}}cat_list{{/join}}\"}}]}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "tags":       {"type": "array",  "required": true},
+        "cat_list":   {"type": "array",  "required": true},
+        "size":       {"type": "number", "required": false, "default": "10"}
+      }
+    },
+    {
+      "id": "t39_empty_inverted_default",
+      "description": "Inverted section with empty content — default should be null",
+      "source": "{\"query\":{\"match\":{\"title\":\"{{query_text}}\"}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}{{/size}}}",
+      "expected_note": "Inverted section is empty -> extractDefaultValue returns null -> no default field in output, but hasInvertedDefault still true -> required false",
+      "expected": {
+        "query_text": {"type": "string", "required": true},
+        "size":       {"type": "number", "required": false}
+      }
+    },
+    {
+      "id": "t40_repeated_var_many_places",
+      "description": "Same variable used 4+ times across different query clauses",
+      "source": "{\"query\":{\"bool\":{\"should\":[{\"match\":{\"title\":\"{{q}}\"}},{\"match\":{\"body\":\"{{q}}\"}},{\"match\":{\"summary\":\"{{q}}\"}},{\"match_phrase\":{\"title\":\"{{q}}\"}}]}},\"highlight\":{\"fields\":{\"title\":{},\"body\":{},\"summary\":{}}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}",
+      "expected": {
+        "q":    {"type": "string", "required": true},
+        "size": {"type": "number", "required": false, "default": "10"}
+      }
+    }
+  ]
+}

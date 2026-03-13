@@ -40,11 +40,7 @@ public class CustomToolsHelper {
 
     public boolean customToolsIndexExists() {
         return MLIndicesHandler
-            .doesMultiTenantIndexExist(
-                clusterService,
-                mlFeatureEnabledSetting.isMultiTenancyEnabled(),
-                CommonValue.ML_CUSTOM_TOOLS_INDEX
-            );
+            .doesMultiTenantIndexExist(clusterService, mlFeatureEnabledSetting.isMultiTenancyEnabled(), CommonValue.ML_CUSTOM_TOOLS_INDEX);
     }
 
     public void searchAllCustomTools(ActionListener<List<ToolMetadata>> listener) {
@@ -78,12 +74,7 @@ public class CustomToolsHelper {
         }
         try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
             SearchRequest searchRequest = new SearchRequest(CommonValue.ML_CUSTOM_TOOLS_INDEX);
-            searchRequest
-                .source(
-                    new SearchSourceBuilder()
-                        .query(QueryBuilders.termQuery("name.keyword", name))
-                        .size(1)
-                );
+            searchRequest.source(new SearchSourceBuilder().query(QueryBuilders.termQuery("name.keyword", name)).size(1));
 
             client.search(searchRequest, ActionListener.wrap(searchResponse -> {
                 context.restore();

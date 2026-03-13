@@ -66,9 +66,6 @@ public class RestMLDeleteCustomToolAction extends BaseRestHandler {
     MLDeleteCustomToolRequest getRequest(RestRequest request) throws IOException {
         String toolId = request.param(PARAMETER_TOOL_ID);
         String tenantId = getTenantID(mlFeatureEnabledSetting.isMultiTenancyEnabled(), request);
-        return MLDeleteCustomToolRequest.builder()
-            .toolId(toolId)
-            .tenantId(tenantId)
-            .build();
+        return MLDeleteCustomToolRequest.builder().toolId(toolId).tenantId(tenantId).build();
     }
 }

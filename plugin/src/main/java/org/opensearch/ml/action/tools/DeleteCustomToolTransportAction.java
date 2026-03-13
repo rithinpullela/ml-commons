@@ -59,14 +59,7 @@ public class DeleteCustomToolTransportAction extends HandledTransportAction<Acti
 
         try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
             sdkClient
-                .deleteDataObjectAsync(
-                    DeleteDataObjectRequest
-                        .builder()
-                        .index(ML_CUSTOM_TOOLS_INDEX)
-                        .id(toolId)
-                        .tenantId(tenantId)
-                        .build()
-                )
+                .deleteDataObjectAsync(DeleteDataObjectRequest.builder().index(ML_CUSTOM_TOOLS_INDEX).id(toolId).tenantId(tenantId).build())
                 .whenComplete((r, throwable) -> {
                     context.restore();
                     if (throwable != null) {

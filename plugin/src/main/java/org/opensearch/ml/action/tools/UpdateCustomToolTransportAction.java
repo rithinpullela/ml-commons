@@ -69,28 +69,18 @@ public class UpdateCustomToolTransportAction extends HandledTransportAction<Acti
                 if (response.getSource() == null) {
                     listener
                         .onFailure(
-                            new IllegalArgumentException(
-                                "Search template '" + updateContent.getSearchTemplateName() + "' not found"
-                            )
+                            new IllegalArgumentException("Search template '" + updateContent.getSearchTemplateName() + "' not found")
                         );
                     return;
                 }
                 performUpdate(toolId, updateContent, tenantId, listener);
-            }, e -> listener
-                .onFailure(
-                    new IllegalArgumentException("Failed to validate search template: " + e.getMessage())
-                )));
+            }, e -> listener.onFailure(new IllegalArgumentException("Failed to validate search template: " + e.getMessage()))));
         } else {
             performUpdate(toolId, updateContent, tenantId, listener);
         }
     }
 
-    private void performUpdate(
-        String toolId,
-        MLCustomToolInput updateContent,
-        String tenantId,
-        ActionListener<UpdateResponse> listener
-    ) {
+    private void performUpdate(String toolId, MLCustomToolInput updateContent, String tenantId, ActionListener<UpdateResponse> listener) {
         try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
             updateContent.setLastUpdateTime(Instant.now());
 
