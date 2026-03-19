@@ -295,6 +295,7 @@ import org.opensearch.ml.engine.tools.VisualizationsTool;
 import org.opensearch.ml.engine.tools.WriteToScratchPadTool;
 import org.opensearch.ml.engine.utils.AgentModelsSearcher;
 import org.opensearch.ml.helper.ConnectorAccessControlHelper;
+import org.opensearch.ml.helper.CustomToolAccessControlHelper;
 import org.opensearch.ml.helper.ModelAccessControlHelper;
 import org.opensearch.ml.jobs.MLJobParameter;
 import org.opensearch.ml.jobs.MLJobRunner;
@@ -528,6 +529,8 @@ public class MachineLearningPlugin extends Plugin
 
     private ConnectorAccessControlHelper connectorAccessControlHelper;
 
+    private CustomToolAccessControlHelper customToolAccessControlHelper;
+
     private MLFeatureEnabledSetting mlFeatureEnabledSetting;
 
     private ConversationalMemoryHandler cmHandler;
@@ -750,6 +753,7 @@ public class MachineLearningPlugin extends Plugin
         mlInputDatasetHandler = new MLInputDatasetHandler(client);
         modelAccessControlHelper = new ModelAccessControlHelper(clusterService, settings);
         connectorAccessControlHelper = new ConnectorAccessControlHelper(clusterService, settings);
+        customToolAccessControlHelper = new CustomToolAccessControlHelper(clusterService, settings);
 
         mlModelManager = new MLModelManager(
             clusterService,
@@ -896,6 +900,7 @@ public class MachineLearningPlugin extends Plugin
         memoryFactoryMap.put(RemoteAgenticConversationMemory.TYPE, remoteAgenticConversationMemoryFactory);
 
         CustomToolResolver customToolResolver = new CustomToolResolver(client);
+        customToolResolver.setAccessChecker(customToolAccessControlHelper::validateToolAccess);
 
         MLAgentExecutor agentExecutor = new MLAgentExecutor(
             client,
@@ -974,7 +979,7 @@ public class MachineLearningPlugin extends Plugin
         }
 
         mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper, customToolResolver);
-        customToolsHelper = new CustomToolsHelper(client, clusterService, mlFeatureEnabledSetting);
+        customToolsHelper = new CustomToolsHelper(client, clusterService, mlFeatureEnabledSetting, customToolAccessControlHelper);
         statelessServerHolder = new McpStatelessServerHolder(mcpToolsHelper, client, threadPool);
 
         return ImmutableList
@@ -1009,6 +1014,7 @@ public class MachineLearningPlugin extends Plugin
                 toolFactoryWrapper,
                 mcpToolsHelper,
                 customToolsHelper,
+                customToolAccessControlHelper,
                 statelessServerHolder
             );
     }
@@ -1413,6 +1419,7 @@ public class MachineLearningPlugin extends Plugin
                 MLCommonsSettings.ML_COMMONS_ALLOW_LOCAL_FILE_UPLOAD,
                 MLCommonsSettings.ML_COMMONS_MODEL_ACCESS_CONTROL_ENABLED,
                 MLCommonsSettings.ML_COMMONS_CONNECTOR_ACCESS_CONTROL_ENABLED,
+                MLCommonsSettings.ML_COMMONS_CUSTOM_TOOL_ACCESS_CONTROL_ENABLED,
                 MLCommonsSettings.ML_COMMONS_TRUSTED_CONNECTOR_ENDPOINTS_REGEX,
                 MLCommonsSettings.ML_COMMONS_REMOTE_MODEL_ELIGIBLE_NODE_ROLES,
                 MLCommonsSettings.ML_COMMONS_LOCAL_MODEL_ELIGIBLE_NODE_ROLES,

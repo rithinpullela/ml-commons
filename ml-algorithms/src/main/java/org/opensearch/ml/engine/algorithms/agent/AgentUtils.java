@@ -1024,6 +1024,9 @@ public class AgentUtils {
                     Map<String, Object> factoryParams = new HashMap<>(toolParams);
                     factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
                     factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+                    if (toolDef.get("index") != null) {
+                        factoryParams.put(SearchTemplateTool.INDEX_FIELD, toolDef.get("index"));
+                    }
 
                     if (!toolFactories.containsKey(toolSpec.getType())) {
                         throw new IllegalArgumentException("Tool type not found");

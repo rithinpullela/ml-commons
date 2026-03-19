@@ -135,6 +135,9 @@ public class MLToolExecutor implements Executable {
                 Map<String, Object> factoryParams = new HashMap<>(runtimeParameters);
                 factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
                 factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+                if (toolDef.get("index") != null) {
+                    factoryParams.put(SearchTemplateTool.INDEX_FIELD, toolDef.get("index"));
+                }
 
                 // Create tool — factory sees search_template_name, uses existing code path
                 Tool tool = toolFactory.create(factoryParams);

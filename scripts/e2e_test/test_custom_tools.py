@@ -413,6 +413,7 @@ def register_tier1_tool():
         "description": "Search products by title with optional category filter and pagination",
         "type": "search_template",
         "search_template_name": "product_search",
+        "index": "products",
     }
     resp = os_request("POST", "/_plugins/_ml/tools/_create", body)
     assert_success(resp, "Register ProductSearch (Tier 1)")
@@ -427,6 +428,7 @@ def register_tier2_tool(model_id):
         "description": "Search logs by date range with optional level filter",
         "type": "search_template",
         "search_template_name": "log_search",
+        "index": "logs",
         "model_id": model_id,
         "llm_interface": "bedrock/converse/claude",
     }
@@ -443,6 +445,7 @@ def register_tier3_tool():
         "description": "Search locations by name within a geographic radius",
         "type": "search_template",
         "search_template_name": "geo_search",
+        "index": "locations",
         "params": {
             "search_text": {
                 "type": "string",

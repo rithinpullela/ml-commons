@@ -54,6 +54,8 @@ import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.client.Client;
 
 import io.modelcontextprotocol.server.McpStatelessAsyncServer;
+import io.modelcontextprotocol.server.McpStatelessServerFeatures;
+import io.modelcontextprotocol.spec.McpSchema;
 import reactor.core.publisher.Mono;
 
 public class McpStatelessServerHolderTests extends OpenSearchTestCase {
@@ -328,6 +330,13 @@ public class McpStatelessServerHolderTests extends OpenSearchTestCase {
         serverField.setAccessible(true);
         serverField.set(null, mcpStatelessAsyncServer);
 
+        // Mock createToolSpecification to return a valid Mono
+        McpStatelessServerFeatures.AsyncToolSpecification mockSpec = new McpStatelessServerFeatures.AsyncToolSpecification(
+            new McpSchema.Tool("ListIndexTool", "test", "{}"),
+            (ctx, request) -> Mono.just(new McpSchema.CallToolResult(java.util.List.of(), false))
+        );
+        when(mcpToolsHelper.createToolSpecification(any())).thenReturn(Mono.just(mockSpec));
+
         // Mock MCP server addTool method to handle any tool specification
         when(mcpStatelessAsyncServer.addTool(any())).thenReturn(Mono.empty());
 
@@ -362,6 +371,13 @@ public class McpStatelessServerHolderTests extends OpenSearchTestCase {
         java.lang.reflect.Field serverField = McpStatelessServerHolder.class.getDeclaredField("mcpStatelessAsyncServer");
         serverField.setAccessible(true);
         serverField.set(null, mcpStatelessAsyncServer);
+
+        // Mock createToolSpecification to return a valid Mono
+        McpStatelessServerFeatures.AsyncToolSpecification mockSpec = new McpStatelessServerFeatures.AsyncToolSpecification(
+            new McpSchema.Tool("ListIndexTool", "test", "{}"),
+            (ctx, request) -> Mono.just(new McpSchema.CallToolResult(java.util.List.of(), false))
+        );
+        when(mcpToolsHelper.createToolSpecification(any())).thenReturn(Mono.just(mockSpec));
 
         // Mock MCP server methods
         when(mcpStatelessAsyncServer.removeTool(any())).thenReturn(Mono.empty());
@@ -399,6 +415,13 @@ public class McpStatelessServerHolderTests extends OpenSearchTestCase {
         java.lang.reflect.Field serverField = McpStatelessServerHolder.class.getDeclaredField("mcpStatelessAsyncServer");
         serverField.setAccessible(true);
         serverField.set(null, mcpStatelessAsyncServer);
+
+        // Mock createToolSpecification to return a valid Mono
+        McpStatelessServerFeatures.AsyncToolSpecification mockSpec = new McpStatelessServerFeatures.AsyncToolSpecification(
+            new McpSchema.Tool("test", "test", "{}"),
+            (ctx, request) -> Mono.just(new McpSchema.CallToolResult(java.util.List.of(), false))
+        );
+        when(mcpToolsHelper.createToolSpecification(any())).thenReturn(Mono.just(mockSpec));
 
         // Mock MCP server methods
         when(mcpStatelessAsyncServer.removeTool(any())).thenReturn(Mono.empty());

@@ -17,6 +17,7 @@ import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.commons.authuser.User;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.transport.tools.MLCreateCustomToolAction;
@@ -26,6 +27,8 @@ import org.opensearch.ml.common.transport.tools.MLCustomToolInput;
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
 import org.opensearch.ml.engine.tools.LLMParameterEnricher;
 import org.opensearch.ml.engine.tools.MustacheTemplateAnalyzer;
+import org.opensearch.ml.helper.CustomToolAccessControlHelper;
+import org.opensearch.ml.utils.RestActionUtils;
 import org.opensearch.ml.utils.TenantAwareHelper;
 import org.opensearch.remote.metadata.client.PutDataObjectRequest;
 import org.opensearch.remote.metadata.client.SdkClient;
@@ -43,6 +46,7 @@ public class CreateCustomToolTransportAction extends HandledTransportAction<Acti
     private final SdkClient sdkClient;
     private final MLFeatureEnabledSetting mlFeatureEnabledSetting;
     private final CustomToolsHelper customToolsHelper;
+    private final CustomToolAccessControlHelper accessControlHelper;
 
     @Inject
     public CreateCustomToolTransportAction(
@@ -52,7 +56,8 @@ public class CreateCustomToolTransportAction extends HandledTransportAction<Acti
         Client client,
         SdkClient sdkClient,
         MLFeatureEnabledSetting mlFeatureEnabledSetting,
-        CustomToolsHelper customToolsHelper
+        CustomToolsHelper customToolsHelper,
+        CustomToolAccessControlHelper accessControlHelper
     ) {
         super(MLCreateCustomToolAction.NAME, transportService, actionFilters, MLCreateCustomToolRequest::new);
         this.mlIndicesHandler = mlIndicesHandler;
@@ -60,6 +65,7 @@ public class CreateCustomToolTransportAction extends HandledTransportAction<Acti
         this.sdkClient = sdkClient;
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
         this.customToolsHelper = customToolsHelper;
+        this.accessControlHelper = accessControlHelper;
     }
 
     @Override
@@ -78,7 +84,24 @@ public class CreateCustomToolTransportAction extends HandledTransportAction<Acti
             return;
         }
 
-        // 3. Check name uniqueness, then validate template and resolve params
+        // 3. Access control validation
+        try {
+            User user = RestActionUtils.getUserContext(client);
+            if (accessControlHelper.accessControlNotEnabled(user)) {
+                accessControlHelper.validateSecurityDisabledRequest(input);
+            } else {
+                accessControlHelper.validateCreateRequest(input, user);
+                if (Boolean.TRUE.equals(input.getAddAllBackendRoles())) {
+                    input.setBackendRoles(user.getBackendRoles());
+                }
+                input.setOwner(user);
+            }
+        } catch (Exception e) {
+            listener.onFailure(e);
+            return;
+        }
+
+        // 4. Check name uniqueness, then validate template and resolve params
         checkNameUniqueness(input, listener);
     }
 

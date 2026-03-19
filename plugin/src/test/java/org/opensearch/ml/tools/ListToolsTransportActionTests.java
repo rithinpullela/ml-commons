@@ -6,6 +6,7 @@
 package org.opensearch.ml.tools;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -20,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.ml.action.tools.CustomToolsHelper;
 import org.opensearch.ml.common.ToolMetadata;
 import org.opensearch.ml.common.transport.tools.MLToolsListRequest;
 import org.opensearch.ml.common.transport.tools.MLToolsListResponse;
@@ -32,6 +34,9 @@ public class ListToolsTransportActionTests extends OpenSearchTestCase {
 
     @Mock
     ActionFilters actionFilters;
+
+    @Mock
+    CustomToolsHelper customToolsHelper;
 
     @Mock
     ActionListener<MLToolsListResponse> actionListener;
@@ -58,7 +63,13 @@ public class ListToolsTransportActionTests extends OpenSearchTestCase {
 
         exceptionToThrow = new RuntimeException("Failed to get tools list");
 
-        listToolsTransportAction = spy(new ListToolsTransportAction(transportService, actionFilters, null));
+        doAnswer(invocation -> {
+            ActionListener<List<ToolMetadata>> listener = invocation.getArgument(0);
+            listener.onResponse(new ArrayList<>());
+            return null;
+        }).when(customToolsHelper).searchAllCustomTools(any());
+
+        listToolsTransportAction = spy(new ListToolsTransportAction(transportService, actionFilters, customToolsHelper));
     }
 
     public void testListTools_Success() {

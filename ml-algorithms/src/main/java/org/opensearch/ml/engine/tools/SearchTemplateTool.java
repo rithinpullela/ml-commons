@@ -60,6 +60,7 @@ public class SearchTemplateTool implements Tool {
 
     public static final String TYPE = "SearchTemplateTool";
     public static final String SEARCH_TEMPLATE_NAME_FIELD = "search_template_name";
+    public static final String INDEX_FIELD = "index";
     public static final String PARAMS_FIELD = "params";
     public static final String EXECUTION_MODE_FIELD = "execution_mode";
     public static final String EXECUTION_MODE_EXECUTE = "execute";
@@ -78,6 +79,7 @@ public class SearchTemplateTool implements Tool {
     private ScriptService scriptService;
     private NamedXContentRegistry xContentRegistry;
     private String searchTemplateName;
+    private String index;
     private Map<String, Object> paramDefinitions;
 
     @Setter
@@ -89,12 +91,14 @@ public class SearchTemplateTool implements Tool {
         ScriptService scriptService,
         NamedXContentRegistry xContentRegistry,
         String searchTemplateName,
+        String index,
         Map<String, Object> paramDefinitions
     ) {
         this.client = client;
         this.scriptService = scriptService;
         this.xContentRegistry = xContentRegistry;
         this.searchTemplateName = searchTemplateName;
+        this.index = index;
         this.paramDefinitions = paramDefinitions;
         this.attributes = buildAttributesFromParamDefinitions(paramDefinitions);
     }
@@ -238,7 +242,11 @@ public class SearchTemplateTool implements Tool {
         SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
         XContentParser parser = JsonXContent.jsonXContent.createParser(xContentRegistry, null, renderedQuery);
         searchSourceBuilder.parseXContent(parser);
-        return new SearchRequest().source(searchSourceBuilder);
+        SearchRequest searchRequest = new SearchRequest().source(searchSourceBuilder);
+        if (index != null && !index.isEmpty()) {
+            searchRequest.indices(index);
+        }
+        return searchRequest;
     }
 
     /**
@@ -396,6 +404,8 @@ public class SearchTemplateTool implements Tool {
                 throw new IllegalArgumentException("search_template_name is required for SearchTemplateTool");
             }
 
+            String index = (String) params.get(INDEX_FIELD);
+
             Map<String, Object> paramDefs = null;
             Object paramsObj = params.get(PARAMS_FIELD);
             if (paramsObj instanceof Map) {
@@ -404,7 +414,7 @@ public class SearchTemplateTool implements Tool {
                 paramDefs = GSON.fromJson((String) paramsObj, Map.class);
             }
 
-            SearchTemplateTool tool = new SearchTemplateTool(client, scriptService, xContentRegistry, templateName, paramDefs);
+            SearchTemplateTool tool = new SearchTemplateTool(client, scriptService, xContentRegistry, templateName, index, paramDefs);
             tool.setOutputParser(ToolParser.createFromToolParams(params));
             return tool;
         }

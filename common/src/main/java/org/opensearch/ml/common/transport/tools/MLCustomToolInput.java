@@ -10,14 +10,18 @@ import static org.opensearch.ml.common.CommonValue.TENANT_ID_FIELD;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
+import org.opensearch.commons.authuser.User;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
 import org.opensearch.core.xcontent.ToXContentObject;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.ml.common.AccessMode;
 import org.opensearch.ml.common.CommonValue;
 
 import lombok.Builder;
@@ -30,19 +34,33 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
     public static final String TOOL_DESCRIPTION_FIELD = "description";
     public static final String TOOL_TYPE_FIELD = "type";
     public static final String SEARCH_TEMPLATE_NAME_FIELD = "search_template_name";
+    public static final String INDEX_FIELD = "index";
     public static final String PARAMS_FIELD = "params";
     public static final String MODEL_ID_FIELD = "model_id";
     public static final String LLM_INTERFACE_FIELD = "llm_interface";
-    public static final String CREATE_TIME_FIELD = CommonValue.CREATE_TIME_FIELD;
-    public static final String LAST_UPDATE_TIME_FIELD = CommonValue.LAST_UPDATE_TIME_FIELD;
+    public static final String BACKEND_ROLES_FIELD = CommonValue.BACKEND_ROLES_FIELD;
+    public static final String ADD_ALL_BACKEND_ROLES_FIELD = "add_all_backend_roles";
+    public static final String ACCESS_FIELD = "access";
+    public static final String OWNER_FIELD = "owner";
+    public static final String CREATE_TIME_FIELD = CommonValue.CREATED_TIME_FIELD;
+    public static final String LAST_UPDATE_TIME_FIELD = CommonValue.LAST_UPDATED_TIME_FIELD;
 
     private String name;
     private String description;
     private String type;
     private String searchTemplateName;
+    private String index;
     private Map<String, Object> params;
     private String modelId;
     private String llmInterface;
+    @Setter
+    private List<String> backendRoles;
+    @Setter
+    private Boolean addAllBackendRoles;
+    @Setter
+    private AccessMode access;
+    @Setter
+    private User owner;
     @Setter
     private String tenantId;
     private Instant createTime;
@@ -54,9 +72,14 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         String description,
         String type,
         String searchTemplateName,
+        String index,
         Map<String, Object> params,
         String modelId,
         String llmInterface,
+        List<String> backendRoles,
+        Boolean addAllBackendRoles,
+        AccessMode access,
+        User owner,
         String tenantId,
         Instant createTime,
         Instant lastUpdateTime,
@@ -89,9 +112,14 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         this.description = description;
         this.type = type;
         this.searchTemplateName = searchTemplateName;
+        this.index = index;
         this.params = params;
         this.modelId = modelId;
         this.llmInterface = llmInterface;
+        this.backendRoles = backendRoles;
+        this.addAllBackendRoles = addAllBackendRoles;
+        this.access = access;
+        this.owner = owner;
         this.tenantId = tenantId;
         this.createTime = createTime;
         this.lastUpdateTime = lastUpdateTime;
@@ -102,11 +130,22 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         description = input.readOptionalString();
         type = input.readOptionalString();
         searchTemplateName = input.readOptionalString();
+        index = input.readOptionalString();
         if (input.readBoolean()) {
             params = input.readMap();
         }
         modelId = input.readOptionalString();
         llmInterface = input.readOptionalString();
+        if (input.readBoolean()) {
+            backendRoles = input.readList(StreamInput::readString);
+        }
+        addAllBackendRoles = input.readOptionalBoolean();
+        if (input.readBoolean()) {
+            access = input.readEnum(AccessMode.class);
+        }
+        if (input.readBoolean()) {
+            owner = new User(input);
+        }
         tenantId = input.readOptionalString();
         createTime = input.readOptionalInstant();
         lastUpdateTime = input.readOptionalInstant();
@@ -121,9 +160,14 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         String description = null;
         String type = null;
         String searchTemplateName = null;
+        String index = null;
         Map<String, Object> params = null;
         String modelId = null;
         String llmInterface = null;
+        List<String> backendRoles = null;
+        Boolean addAllBackendRoles = null;
+        AccessMode access = null;
+        User owner = null;
         String tenantId = null;
         Instant createTime = null;
         Instant lastUpdateTime = null;
@@ -146,6 +190,9 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
                 case SEARCH_TEMPLATE_NAME_FIELD:
                     searchTemplateName = parser.text();
                     break;
+                case INDEX_FIELD:
+                    index = parser.text();
+                    break;
                 case PARAMS_FIELD:
                     params = parser.map();
                     break;
@@ -154,6 +201,21 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
                     break;
                 case LLM_INTERFACE_FIELD:
                     llmInterface = parser.text();
+                    break;
+                case BACKEND_ROLES_FIELD:
+                    backendRoles = new ArrayList<>();
+                    while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                        backendRoles.add(parser.text());
+                    }
+                    break;
+                case ADD_ALL_BACKEND_ROLES_FIELD:
+                    addAllBackendRoles = parser.booleanValue();
+                    break;
+                case ACCESS_FIELD:
+                    access = AccessMode.from(parser.text());
+                    break;
+                case OWNER_FIELD:
+                    owner = User.parse(parser);
                     break;
                 case TENANT_ID_FIELD:
                     tenantId = parser.textOrNull();
@@ -175,9 +237,14 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
             .description(description)
             .type(type)
             .searchTemplateName(searchTemplateName)
+            .index(index)
             .params(params)
             .modelId(modelId)
             .llmInterface(llmInterface)
+            .backendRoles(backendRoles)
+            .addAllBackendRoles(addAllBackendRoles)
+            .access(access)
+            .owner(owner)
             .tenantId(tenantId)
             .createTime(createTime)
             .lastUpdateTime(lastUpdateTime)
@@ -200,6 +267,9 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         if (searchTemplateName != null) {
             builder.field(SEARCH_TEMPLATE_NAME_FIELD, searchTemplateName);
         }
+        if (index != null) {
+            builder.field(INDEX_FIELD, index);
+        }
         if (this.params != null) {
             builder.field(PARAMS_FIELD, this.params);
         }
@@ -208,6 +278,15 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         }
         if (llmInterface != null) {
             builder.field(LLM_INTERFACE_FIELD, llmInterface);
+        }
+        if (backendRoles != null) {
+            builder.field(BACKEND_ROLES_FIELD, backendRoles);
+        }
+        if (access != null) {
+            builder.field(ACCESS_FIELD, access.getValue());
+        }
+        if (owner != null) {
+            builder.field(OWNER_FIELD, owner);
         }
         if (tenantId != null) {
             builder.field(TENANT_ID_FIELD, tenantId);
@@ -228,6 +307,7 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         output.writeOptionalString(description);
         output.writeOptionalString(type);
         output.writeOptionalString(searchTemplateName);
+        output.writeOptionalString(index);
         if (params != null) {
             output.writeBoolean(true);
             output.writeMap(params);
@@ -236,6 +316,25 @@ public class MLCustomToolInput implements ToXContentObject, Writeable {
         }
         output.writeOptionalString(modelId);
         output.writeOptionalString(llmInterface);
+        if (backendRoles != null) {
+            output.writeBoolean(true);
+            output.writeStringCollection(backendRoles);
+        } else {
+            output.writeBoolean(false);
+        }
+        output.writeOptionalBoolean(addAllBackendRoles);
+        if (access != null) {
+            output.writeBoolean(true);
+            output.writeEnum(access);
+        } else {
+            output.writeBoolean(false);
+        }
+        if (owner != null) {
+            output.writeBoolean(true);
+            owner.writeTo(output);
+        } else {
+            output.writeBoolean(false);
+        }
         output.writeOptionalString(tenantId);
         output.writeOptionalInstant(createTime);
         output.writeOptionalInstant(lastUpdateTime);

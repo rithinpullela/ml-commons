@@ -179,9 +179,96 @@ flowchart TD
 
 ---
 
-## 6. Low-Level Implementation
+## 6. Define Once, Use Everywhere
 
-### 6.1 System Index: `.plugins-ml-custom-tools`
+A core design goal is that once a tool is registered, it can be used across every surface in the ML framework — the Execute API, agents, and MCP servers — with minimal configuration. The stored tool definition carries everything needed: the search template reference, parameter schema, and description. Consumers reference the tool by **name** and the system resolves the rest.
+
+### 6.1 Direct Execution
+
+For testing or programmatic use, tools can be executed directly without an agent:
+
+```bash
+POST /_plugins/_ml/tools/_execute/SearchTemplateTool
+{
+  "name": "ProductSearch",
+  "parameters": {
+    "query_text": "wireless headphones",
+    "category": "electronics"
+  }
+}
+```
+
+The `name` field tells the system to look up the stored tool definition. Runtime `parameters` are merged with stored defaults — if the tool has `size` defaulting to 20 and the caller doesn't provide it, 20 is used.
+
+### 6.2 Agents
+
+Attaching a custom tool to an agent requires just the type and name. The agent auto-fetches the tool's description and `input_schema` from the stored definition, so the LLM knows what parameters to fill:
+
+```bash
+POST /_plugins/_ml/agents/_register
+{
+  "name": "Shopping Assistant",
+  "type": "conversational",
+  "llm": { "model_id": "my-model" },
+  "tools": [
+    {
+      "type": "SearchTemplateTool",
+      "name": "ProductSearch"
+    }
+  ]
+}
+```
+
+No need to repeat the search template name, parameter definitions, or description — it's all resolved from the stored tool. If needed, the description and `input_schema` can be overridden at the agent level for context-specific tuning (e.g., giving the LLM more specific instructions for a particular agent's use case).
+
+### 6.3 MCP Server
+
+Custom tools are also exposed via the OpenSearch MCP Server, allowing external agents (Claude, GPT, Cursor, etc.) to discover and invoke them through the Model Context Protocol:
+
+```mermaid
+sequenceDiagram
+    participant ExternalAgent as External Agent (Claude/GPT)
+    participant MCP as OpenSearch MCP Server
+    participant OpenSearch
+
+    ExternalAgent->>MCP: tools/list
+    MCP->>OpenSearch: GET /_plugins/_ml/tools
+    OpenSearch->>MCP: Custom tools with input_schema
+    MCP->>ExternalAgent: Tool definitions (JSON Schema)
+
+    ExternalAgent->>MCP: tools/call ProductSearch {query_text: "shoes", category: "footwear"}
+    MCP->>OpenSearch: Execute tool with parameters
+    OpenSearch->>MCP: Search results
+    MCP->>ExternalAgent: Results
+```
+
+The `input_schema` auto-generated from parameter definitions is already valid JSON Schema, which is exactly what MCP expects. The MCP server simply proxies tool definitions and invocations — no additional configuration needed per tool.
+
+### 6.4 Resolution Strategy
+
+When a tool is referenced by name, the system resolves each field using a fallback chain:
+
+```mermaid
+flowchart TD
+    A[Tool referenced by name] --> B[Fetch stored definition from .plugins-ml-custom-tools]
+    B --> C{Description provided at agent/MCP level?}
+    C -->|Yes| D[Use override]
+    C -->|No| E[Use stored description]
+    B --> F{input_schema provided at agent/MCP level?}
+    F -->|Yes| G[Use override]
+    F -->|No| H[Build from stored params]
+    B --> I{Runtime param value provided?}
+    I -->|Yes| J[Use runtime value]
+    I -->|No| K[Use stored default]
+```
+
+This layering means a single tool definition serves multiple agents with different prompting strategies, while the underlying search template and parameter schema remain consistent.
+
+---
+
+## 7. Low-Level Implementation
+
+### 7.1 System Index: `.plugins-ml-custom-tools`
 
 Custom tools are stored in a dedicated system index, following the same pattern as connectors, models, and agents.
 
@@ -199,7 +286,7 @@ Custom tools are stored in a dedicated system index, following the same pattern 
 | `create_time` | date | Auto-set |
 | `last_update_time` | date | Auto-set on create/update |
 
-### 6.2 CRUD API
+### 7.2 CRUD API
 
 ```mermaid
 flowchart LR
@@ -235,7 +322,7 @@ flowchart LR
 
 **GET/LIST merges built-in and custom tools** into a single response. Built-in tools take precedence on name conflicts.
 
-### 6.3 SearchTemplateTool Execution
+### 7.3 SearchTemplateTool Execution
 
 The tool renders Mustache templates via `ScriptService` (OpenSearch core), avoiding any direct dependency on the `lang-mustache` module.
 
@@ -260,7 +347,7 @@ flowchart TD
 - `render_only` — render + return the DSL query (debugging/transparency)
 - `both` — render + search + return both
 
-### 6.4 MustacheTemplateAnalyzer (AST Walker)
+### 7.4 MustacheTemplateAnalyzer (AST Walker)
 
 The analyzer compiles the template with `mustache.java` (same library OpenSearch uses: `com.github.spullara.mustache.java:compiler:0.9.14`) and recursively walks the Code tree.
 
@@ -288,7 +375,7 @@ The analyzer compiles the template with `mustache.java` (same library OpenSearch
 - Appears only inside own section (`{{#var}}...{{var}}...{{/var}}`) → **optional** (self-guarding)
 - Appears at root scope with none of the above → **required**
 
-### 6.5 Validation Rules
+### 7.5 Validation Rules
 
 | Rule | When | Error |
 |---|---|---|
@@ -300,7 +387,7 @@ The analyzer compiles the template with `mustache.java` (same library OpenSearch
 | params XOR model_id | Create | `Cannot specify both 'params' and 'model_id'` |
 | Required params present | Runtime | `Missing required parameters` |
 
-### 6.6 Files
+### 7.6 Files
 
 **New files (17):** Index mapping, data model (`MLCustomToolInput`), transport actions/requests/responses for Create/Update/Delete, `SearchTemplateTool` + Factory, `MustacheTemplateAnalyzer`, REST handlers, `CustomToolsHelper`.
 
@@ -308,91 +395,152 @@ The analyzer compiles the template with `mustache.java` (same library OpenSearch
 
 ---
 
-## 7. Appendix
+## 8. Appendix
 
-### 7.1 POC Branch
+### 8.1 POC Branch
 
 **Branch:** [`feature/custom-tools`](https://github.com/rithin-pullela-aws/ml-commons/tree/feature/custom-tools)
 
-**How to test:**
+A full end-to-end Postman collection is available at [`scripts/e2e_test/Custom_Tools_API.postman_collection.json`](scripts/e2e_test/Custom_Tools_API.postman_collection.json) covering all three tiers, direct execution, agent integration, MCP, and RBAC. Below is a walkthrough of the key flows.
+
+#### Step 1: Create search templates
 
 ```bash
-# 1. Build and start OpenSearch with ml-commons
-./gradlew run
-
-# 2. Create a search template
-curl -X POST 'http://localhost:9200/_scripts/product_search' \
-  -H 'Content-Type: application/json' -d '{
+# Product search — match on title, optional category filter, pagination with defaults
+PUT /_scripts/product_search
+{
   "script": {
     "lang": "mustache",
     "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#category}},\"filter\":[{\"term\":{\"category\":\"{{category}}\"}}]{{/category}}}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}"
   }
-}'
+}
 
-# 3. Create a custom tool (Tier 1 — auto-extract params)
-curl -X POST 'http://localhost:9200/_plugins/_ml/tools/_create' \
-  -H 'Content-Type: application/json' -d '{
-  "name": "ProductSearchTool",
-  "description": "Search products with optional category filter and pagination",
+# Log search — date range with optional level filter
+PUT /_scripts/log_search
+{
+  "script": {
+    "lang": "mustache",
+    "source": "{\"query\":{\"bool\":{\"must\":[{\"range\":{\"timestamp\":{\"gte\":\"{{start_date}}\",\"lte\":\"{{end_date}}\"}}}{{#level}},{\"term\":{\"level\":\"{{level}}\"}}{{/level}}]}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}50{{/size}}}"
+  }
+}
+
+# Geo search — location name within radius
+PUT /_scripts/geo_search
+{
+  "script": {
+    "lang": "mustache",
+    "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"name\":\"{{search_text}}\"}}],\"filter\":[{\"geo_distance\":{\"distance\":\"{{radius}}\",\"location\":{\"lat\":{{lat}},\"lon\":{{lon}}}}}]}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}"
+  }
+}
+```
+
+#### Step 2: Register custom tools (one per tier)
+
+```bash
+# Tier 1 — AST auto-extract (no params, no model_id)
+POST /_plugins/_ml/tools/_create
+{
+  "name": "ProductSearch",
+  "description": "Search products by title with optional category filter and pagination",
   "type": "search_template",
-  "search_template_name": "product_search"
-}'
-# Response includes auto-generated params:
-# {
-#   "tool_id": "abc123",
-#   "params": {
-#     "query_text": { "type": "string", "description": "Value for the 'title' field (match)", "required": true },
-#     "category":   { "type": "string", "description": "Value for the 'category' field (term)", "required": false },
-#     "from":       { "type": "string", "description": "Value for 'from'", "required": false, "default": "0" },
-#     "size":       { "type": "string", "description": "Value for 'size'", "required": false, "default": "20" }
-#   }
-# }
+  "search_template_name": "product_search",
+  "index": "products"
+}
 
-# 4. Verify: Get the tool
-curl 'http://localhost:9200/_plugins/_ml/tools/ProductSearchTool' | python3 -m json.tool
+# Tier 2 — AST + LLM enrichment (provide model_id)
+POST /_plugins/_ml/tools/_create
+{
+  "name": "LogSearch",
+  "description": "Search logs by date range with optional level filter",
+  "type": "search_template",
+  "search_template_name": "log_search",
+  "index": "logs",
+  "model_id": "<your-model-id>",
+  "llm_interface": "bedrock/converse/claude"
+}
 
-# 5. List all tools (built-in + custom merged)
-curl 'http://localhost:9200/_plugins/_ml/tools' | python3 -m json.tool
+# Tier 3 — Manual params (full control)
+POST /_plugins/_ml/tools/_create
+{
+  "name": "GeoSearch",
+  "description": "Search locations by name within a geographic radius",
+  "type": "search_template",
+  "search_template_name": "geo_search",
+  "index": "locations",
+  "params": {
+    "search_text": { "type": "string", "description": "Search text for location name", "required": true },
+    "radius":      { "type": "string", "description": "Search radius (e.g., '10km')", "required": true },
+    "lat":         { "type": "number", "description": "Latitude of center point", "required": true },
+    "lon":         { "type": "number", "description": "Longitude of center point", "required": true },
+    "size":        { "type": "number", "description": "Max results to return", "required": false, "default": "10" }
+  }
+}
+```
 
-# 6. Register an agent with the custom tool
-curl -X POST 'http://localhost:9200/_plugins/_ml/agents/_register' \
-  -H 'Content-Type: application/json' -d '{
-  "name": "ProductAgent",
+#### Step 3: Execute tools directly
+
+```bash
+# Product search — basic
+POST /_plugins/_ml/tools/_execute/SearchTemplateTool
+{ "name": "ProductSearch", "parameters": { "query_text": "wireless headphones", "size": "5" } }
+
+# Product search — with category filter
+POST /_plugins/_ml/tools/_execute/SearchTemplateTool
+{ "name": "ProductSearch", "parameters": { "query_text": "laptop", "category": "electronics", "size": "3" } }
+
+# Geo search — coffee shops in NYC
+POST /_plugins/_ml/tools/_execute/SearchTemplateTool
+{ "name": "GeoSearch", "parameters": { "search_text": "coffee shop", "radius": "5km", "lat": "40.7128", "lon": "-74.0060" } }
+
+# Log search — date range
+POST /_plugins/_ml/tools/_execute/SearchTemplateTool
+{ "name": "LogSearch", "parameters": { "start_date": "2024-01-01", "end_date": "2024-12-31" } }
+```
+
+#### Step 4: Register an agent with custom tools
+
+```bash
+POST /_plugins/_ml/agents/_register
+{
+  "name": "ShoppingAssistant",
   "type": "conversational",
-  "llm": { "model_id": "<your-model-id>" },
-  "tools": [{
-    "type": "SearchTemplateTool",
-    "parameters": {
-      "search_template_name": "product_search"
-    }
-  }]
-}'
+  "tools": [
+    { "type": "SearchTemplateTool", "name": "ProductSearch" },
+    { "type": "ListIndexTool" }
+  ],
+  "llm": {
+    "model_id": "<your-model-id>",
+    "parameters": { "prompt": "${parameters.question}" }
+  },
+  "parameters": { "_llm_interface": "bedrock/converse/claude" },
+  "memory": { "type": "conversation_index" }
+}
+
+# Ask the agent a question — it picks ProductSearch via function calling
+POST /_plugins/_ml/agents/<agent_id>/_execute
+{ "parameters": { "question": "Find me wireless headphones", "verbose": "true" } }
 ```
 
-### 7.2 POC: Custom Tools via MCP Server
+#### Step 5: Expose via MCP Server
 
-Custom tools can be exposed as MCP (Model Context Protocol) tools, allowing external agents (Claude, GPT, etc.) to discover and invoke them directly.
+```bash
+# Register the tool with MCP
+POST /_plugins/_ml/mcp/tools/_register
+{ "tools": [{ "type": "SearchTemplateTool", "name": "ProductSearch" }] }
 
-```mermaid
-sequenceDiagram
-    participant ExternalAgent as External Agent (Claude/GPT)
-    participant MCP as MCP Server
-    participant OpenSearch
+# External agents discover tools via MCP protocol
+POST /_plugins/_ml/mcp
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }
 
-    ExternalAgent->>MCP: tools/list
-    MCP->>OpenSearch: GET /_plugins/_ml/tools
-    OpenSearch->>MCP: Built-in + custom tools with input_schema
-    MCP->>ExternalAgent: Tool definitions (JSON Schema)
-
-    ExternalAgent->>MCP: tools/call ProductSearchTool {category: "shoes", price_max: 50}
-    MCP->>OpenSearch: POST /_plugins/_ml/agents/<id>/_execute
-    OpenSearch->>MCP: Search results
-    MCP->>ExternalAgent: Results
+# External agents call tools via MCP protocol
+POST /_plugins/_ml/mcp
+{
+  "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "ProductSearch", "arguments": { "query_text": "headphones", "category": "electronics" } }
+}
 ```
 
-The `input_schema` auto-generated from parameter definitions is already valid JSON Schema, making MCP integration straightforward — the MCP server simply proxies tool definitions and invocations.
-
-### 7.3 Test Results Summary
+### 8.2 Test Results Summary
 
 40 templates tested covering: basic variables, inverted defaults, toJson arrays, self-guarding sections, boolean guards, nested scopes, dot notation, triple braces, helpers (join/url/toJson), and a 15-parameter e-commerce template.
 
@@ -405,10 +553,51 @@ The `input_schema` auto-generated from parameter definitions is already valid JS
 
 Full results: [PARAM_AUTO_GENERATION_TEST_RESULTS.md](PARAM_AUTO_GENERATION_TEST_RESULTS.md)
 
-### 7.4 Future Work
+### 8.3 Implementation Status
 
-1. **Agent-level tool resolution by ID** — Add `custom_tool_id` to `MLToolSpec` so agents reference tools by index ID
-2. **Tier 2 LLM enhancement** — Wire up `MachineLearningNodeClient.predict()` for richer descriptions
-3. **Additional tool types** — `http_connector`, `script` (painless), etc.
-4. **Search API** — `POST /_plugins/_ml/tools/_search` for querying custom tools
-5. **Access control** — `backend_roles` and `access_mode` fields for fine-grained permissions
+The feature is being rolled out in phases:
+
+| Phase | Scope | Status |
+|---|---|---|
+| **Phase 1** | CRUD APIs, system index, SearchTemplateTool, MustacheTemplateAnalyzer (auto-extraction), Tool Execute API with name-based resolution | Done |
+| **Phase 2** | Name-based resolution in Agents and MCP — async `createTools()` with `CustomToolResolver`, override/fallback chain | Done |
+| **Phase 3** | Access control — `backend_roles`, `access_mode` (`public`/`private`/`restricted`), modeled on the existing connector RBAC pattern | Done |
+
+### 8.4 Phase 3 — RBAC Implementation Details
+
+Phase 3 adds role-based access control (RBAC) for custom tools, following the same pattern used by connectors (`ConnectorAccessControlHelper`).
+
+**Cluster setting:** `plugins.ml_commons.custom_tool_access_control_enabled` (dynamic, default `false`)
+
+**Access modes:**
+- `public` — any user can discover and use the tool (read-only; only owner/admin can update/delete)
+- `private` — only the owner can see, update, or delete
+- `restricted` — only users with matching backend roles can discover; only owner/admin can update/delete
+
+**Index mapping changes:** Added `backend_roles` (text+keyword), `access` (keyword), and `owner` (nested object with name, backend_roles, roles, custom_attribute_names) to `.plugins-ml-custom-tools`.
+
+**New files:**
+- `CustomToolAccessControlHelper` — validates create requests, checks permissions on CRUD, adds search filters for list/get
+- E2E test script: `test_rbac_custom_tools.sh`
+
+**Modified files:**
+- `MLCustomToolInput` — added `backendRoles`, `addAllBackendRoles`, `access`, `owner` fields with full serialization
+- `MLCommonsSettings` — added `ML_COMMONS_CUSTOM_TOOL_ACCESS_CONTROL_ENABLED`
+- `CreateCustomToolTransportAction` — validates RBAC params, sets owner on creation
+- `UpdateCustomToolTransportAction` — fetch-then-validate pattern (checks ownership before allowing update)
+- `DeleteCustomToolTransportAction` — fetch-then-validate pattern (checks ownership before allowing delete)
+- `CustomToolsHelper` — applies search filters so list/get respects access modes
+- `CustomToolResolver` — checks access via `BiConsumer<User, Map>` pattern (cross-module bridge)
+- `MachineLearningPlugin` — wires up `CustomToolAccessControlHelper`, registers setting
+
+**Key design decisions:**
+- User context is captured BEFORE `stashContext()` since stashing clears thread-context transients
+- Cross-module access checking uses `BiConsumer<User, Map<String, Object>>` since `ml-algorithms` cannot import plugin classes
+- Tools created before RBAC was enabled (no `owner` field) are treated as public for backward compatibility
+- Admin users (`all_access` role) bypass all access checks
+
+### 8.5 Future Work
+
+1. **Tier 2 LLM enhancement** — Wire up `MachineLearningNodeClient.predict()` for richer descriptions
+2. **Additional tool types** — `http_connector`, `script` (painless), etc.
+3. **Search API** — `POST /_plugins/_ml/tools/_search` for querying custom tools

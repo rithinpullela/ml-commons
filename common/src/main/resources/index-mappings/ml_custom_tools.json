@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "schema_version": 1
+    "schema_version": 3
   },
   "properties": {
     "name": {
@@ -27,17 +27,70 @@
     "search_template_name": {
       "type": "keyword"
     },
+    "index": {
+      "type": "keyword"
+    },
     "params": {
       "type": "flat_object"
+    },
+    "backend_roles": {
+      "type": "text",
+      "fields": {
+        "keyword": {
+          "type": "keyword",
+          "ignore_above": 256
+        }
+      }
+    },
+    "access": {
+      "type": "keyword"
+    },
+    "owner": {
+      "type": "nested",
+      "properties": {
+        "name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "backend_roles": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "roles": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "custom_attribute_names": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
     },
     "tenant_id": {
       "type": "keyword"
     },
-    "create_time": {
+    "created_time": {
       "type": "date",
       "format": "strict_date_time||epoch_millis"
     },
-    "last_update_time": {
+    "last_updated_time": {
       "type": "date",
       "format": "strict_date_time||epoch_millis"
     }

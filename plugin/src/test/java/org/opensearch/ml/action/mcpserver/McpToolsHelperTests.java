@@ -255,7 +255,14 @@ public class McpToolsHelperTests extends OpenSearchTestCase {
     @Test
     public void test_createToolSpecification_factoryNotFound() {
         McpToolBaseInput tool = new McpToolRegisterInput("NonExistentTool", "NonExistentTool", "Test tool", Map.of(), Map.of(), null, null);
-        assertThrows(RuntimeException.class, () -> mcpToolsHelper.createToolSpecification(tool));
+        var mono = mcpToolsHelper.createToolSpecification(tool);
+        assertNotNull(mono);
+        try {
+            mono.block();
+            fail("Expected RuntimeException");
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage().contains("Failed to find tool factory for tool type"));
+        }
     }
 
     // ==================== HELPER METHODS ====================

@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.ml.action.tools.CustomToolsHelper;
 import org.opensearch.ml.common.ToolMetadata;
 import org.opensearch.ml.common.transport.tools.MLToolGetRequest;
 import org.opensearch.ml.common.transport.tools.MLToolGetResponse;
@@ -32,6 +33,9 @@ public class GetToolTransportActionTests extends OpenSearchTestCase {
 
     @Mock
     ActionFilters actionFilters;
+
+    @Mock
+    CustomToolsHelper customToolsHelper;
 
     @Mock
     ActionListener<MLToolGetResponse> actionListener;
@@ -54,7 +58,7 @@ public class GetToolTransportActionTests extends OpenSearchTestCase {
         mlToolGetRequest = MLToolGetRequest.builder().toolMetadataList(toolMetadataList).toolName("WikipediaTool").build();
         exceptionToThrow = new RuntimeException("Failed to get tool");
 
-        getToolTransportAction = spy(new GetToolTransportAction(transportService, actionFilters, null));
+        getToolTransportAction = spy(new GetToolTransportAction(transportService, actionFilters, customToolsHelper));
     }
 
     public void testGetTool_Success() {

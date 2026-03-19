@@ -9,18 +9,24 @@ import static org.opensearch.ml.common.CommonValue.ML_CUSTOM_TOOLS_INDEX;
 
 import java.time.Instant;
 
+import org.opensearch.OpenSearchStatusException;
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.admin.cluster.storedscripts.GetStoredScriptRequest;
+import org.opensearch.action.get.GetRequest;
 import org.opensearch.action.support.ActionFilters;
 import org.opensearch.action.support.HandledTransportAction;
 import org.opensearch.action.update.UpdateResponse;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.commons.authuser.User;
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.rest.RestStatus;
 import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.transport.tools.MLCustomToolInput;
 import org.opensearch.ml.common.transport.tools.MLUpdateCustomToolAction;
 import org.opensearch.ml.common.transport.tools.MLUpdateCustomToolRequest;
+import org.opensearch.ml.helper.CustomToolAccessControlHelper;
+import org.opensearch.ml.utils.RestActionUtils;
 import org.opensearch.ml.utils.TenantAwareHelper;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.remote.metadata.client.UpdateDataObjectRequest;
@@ -36,6 +42,7 @@ public class UpdateCustomToolTransportAction extends HandledTransportAction<Acti
     private final Client client;
     private final SdkClient sdkClient;
     private final MLFeatureEnabledSetting mlFeatureEnabledSetting;
+    private final CustomToolAccessControlHelper accessControlHelper;
 
     @Inject
     public UpdateCustomToolTransportAction(
@@ -43,12 +50,14 @@ public class UpdateCustomToolTransportAction extends HandledTransportAction<Acti
         ActionFilters actionFilters,
         Client client,
         SdkClient sdkClient,
-        MLFeatureEnabledSetting mlFeatureEnabledSetting
+        MLFeatureEnabledSetting mlFeatureEnabledSetting,
+        CustomToolAccessControlHelper accessControlHelper
     ) {
         super(MLUpdateCustomToolAction.NAME, transportService, actionFilters, MLUpdateCustomToolRequest::new);
         this.client = client;
         this.sdkClient = sdkClient;
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
+        this.accessControlHelper = accessControlHelper;
     }
 
     @Override
@@ -62,6 +71,43 @@ public class UpdateCustomToolTransportAction extends HandledTransportAction<Acti
             return;
         }
 
+        User user = RestActionUtils.getUserContext(client);
+        if (accessControlHelper.skipAccessControl(user)) {
+            validateAndUpdate(toolId, updateContent, tenantId, listener);
+            return;
+        }
+
+        // Fetch tool first to check permissions
+        try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
+            client.get(new GetRequest(ML_CUSTOM_TOOLS_INDEX, toolId), ActionListener.wrap(getResponse -> {
+                context.restore();
+                if (!getResponse.isExists()) {
+                    listener.onFailure(new OpenSearchStatusException("Custom tool not found: " + toolId, RestStatus.NOT_FOUND));
+                    return;
+                }
+                try {
+                    accessControlHelper.validateToolAccess(user, getResponse.getSourceAsMap());
+                    validateAndUpdate(toolId, updateContent, tenantId, listener);
+                } catch (Exception e) {
+                    listener.onFailure(e);
+                }
+            }, e -> {
+                context.restore();
+                log.error("Failed to get custom tool for access validation", e);
+                listener.onFailure(e);
+            }));
+        } catch (Exception e) {
+            log.error("Failed to validate access for custom tool update", e);
+            listener.onFailure(e);
+        }
+    }
+
+    private void validateAndUpdate(
+        String toolId,
+        MLCustomToolInput updateContent,
+        String tenantId,
+        ActionListener<UpdateResponse> listener
+    ) {
         // If search_template_name is being changed, validate it exists
         if (updateContent.getSearchTemplateName() != null) {
             GetStoredScriptRequest getScriptRequest = new GetStoredScriptRequest(updateContent.getSearchTemplateName());

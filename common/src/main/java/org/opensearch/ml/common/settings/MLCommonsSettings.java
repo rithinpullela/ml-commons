@@ -224,6 +224,14 @@ public final class MLCommonsSettings {
             Setting.Property.Dynamic
         );
 
+    public static final Setting<Boolean> ML_COMMONS_CUSTOM_TOOL_ACCESS_CONTROL_ENABLED = Setting
+        .boolSetting(
+            ML_PLUGIN_SETTING_PREFIX + "custom_tool_access_control_enabled",
+            false,
+            Setting.Property.NodeScope,
+            Setting.Property.Dynamic
+        );
+
     public static final Setting<Boolean> ML_COMMONS_OFFLINE_BATCH_INGESTION_ENABLED = Setting
         .boolSetting(
             ML_PLUGIN_SETTING_PREFIX + "offline_batch_ingestion_enabled",

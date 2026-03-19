@@ -1,0 +1,1143 @@
+{
+  "info": {
+    "name": "OpenSearch Custom Tools API",
+    "description": "Complete API collection for OpenSearch ML Commons Custom Tools feature.\n\nCovers:\n- CRUD operations (Create, Get, List, Update, Delete)\n- Tool execution via Execute API\n- RBAC (Private, Public, Restricted access modes)\n- Agent integration (Chat + PER agents with custom tools)\n- MCP Server integration (JSON-RPC tool discovery and invocation)\n\nVariables:\n- {{base_url}} — OpenSearch URL (default: https://localhost:9200)\n- {{admin_user}} / {{admin_pass}} — Admin credentials\n- {{user1}} / {{user1_pass}} — Test user 1 (backend_role: role_a)\n- {{user2}} / {{user2_pass}} — Test user 2 (backend_role: role_b)\n- {{tool_id}} — Auto-set after tool creation\n- {{model_id}} — Set after model registration/deployment\n- {{chat_agent_id}} / {{per_agent_id}} — Set after agent registration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://localhost:9200" },
+    { "key": "admin_user", "value": "admin" },
+    { "key": "admin_pass", "value": "admin" },
+    { "key": "user1", "value": "user1" },
+    { "key": "user1_pass", "value": "user1" },
+    { "key": "user2", "value": "user2" },
+    { "key": "user2_pass", "value": "user2" },
+    { "key": "tool_id", "value": "" },
+    { "key": "model_id", "value": "" },
+    { "key": "connector_id", "value": "" },
+    { "key": "aws_access_key", "value": "" },
+    { "key": "aws_secret_key", "value": "" },
+    { "key": "aws_session_token", "value": "" },
+    { "key": "chat_agent_id", "value": "" },
+    { "key": "per_agent_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Setup",
+      "description": "Prerequisite setup: test data, search templates, users, roles, cluster settings.",
+      "item": [
+        {
+          "name": "Create Products Index",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/products", "host": ["{{base_url}}"], "path": ["products"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mappings\": {\n    \"properties\": {\n      \"title\": { \"type\": \"text\" },\n      \"category\": { \"type\": \"keyword\" },\n      \"price\": { \"type\": \"float\" },\n      \"description\": { \"type\": \"text\" }\n    }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Index Sample Products (Bulk)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_bulk?refresh=true", "host": ["{{base_url}}"], "path": ["_bulk"], "query": [{ "key": "refresh", "value": "true" }] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"index\":{\"_index\":\"products\",\"_id\":\"1\"}}\n{\"title\":\"Wireless Bluetooth Headphones\",\"category\":\"electronics\",\"price\":79.99,\"description\":\"Noise cancelling over-ear headphones with 30hr battery\"}\n{\"index\":{\"_index\":\"products\",\"_id\":\"2\"}}\n{\"title\":\"USB-C Charging Cable\",\"category\":\"electronics\",\"price\":12.99,\"description\":\"Fast charging cable compatible with all USB-C devices\"}\n{\"index\":{\"_index\":\"products\",\"_id\":\"3\"}}\n{\"title\":\"Running Shoes Pro\",\"category\":\"sports\",\"price\":129.99,\"description\":\"Lightweight running shoes with cushioned sole\"}\n{\"index\":{\"_index\":\"products\",\"_id\":\"4\"}}\n{\"title\":\"Yoga Mat Premium\",\"category\":\"sports\",\"price\":45.99,\"description\":\"Non-slip yoga mat with carrying strap\"}\n{\"index\":{\"_index\":\"products\",\"_id\":\"5\"}}\n{\"title\":\"Coffee Maker Deluxe\",\"category\":\"kitchen\",\"price\":89.99,\"description\":\"12-cup programmable coffee maker with thermal carafe\"}\n"
+            }
+          }
+        },
+        {
+          "name": "Create Logs Index",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/logs", "host": ["{{base_url}}"], "path": ["logs"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mappings\": {\n    \"properties\": {\n      \"timestamp\": { \"type\": \"date\" },\n      \"level\": { \"type\": \"keyword\" },\n      \"message\": { \"type\": \"text\" }\n    }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Index Sample Logs (Bulk)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_bulk?refresh=true", "host": ["{{base_url}}"], "path": ["_bulk"], "query": [{ "key": "refresh", "value": "true" }] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"index\":{\"_index\":\"logs\",\"_id\":\"1\"}}\n{\"timestamp\":\"2024-03-15T10:00:00Z\",\"level\":\"ERROR\",\"message\":\"Connection timeout to database\"}\n{\"index\":{\"_index\":\"logs\",\"_id\":\"2\"}}\n{\"timestamp\":\"2024-06-20T14:30:00Z\",\"level\":\"WARN\",\"message\":\"High memory usage detected\"}\n{\"index\":{\"_index\":\"logs\",\"_id\":\"3\"}}\n{\"timestamp\":\"2024-09-01T08:15:00Z\",\"level\":\"INFO\",\"message\":\"Service started successfully\"}\n{\"index\":{\"_index\":\"logs\",\"_id\":\"4\"}}\n{\"timestamp\":\"2024-11-10T22:45:00Z\",\"level\":\"ERROR\",\"message\":\"Disk space critical on node-3\"}\n{\"index\":{\"_index\":\"logs\",\"_id\":\"5\"}}\n{\"timestamp\":\"2024-12-25T00:00:00Z\",\"level\":\"INFO\",\"message\":\"Scheduled maintenance complete\"}\n"
+            }
+          }
+        },
+        {
+          "name": "Create Locations Index",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/locations", "host": ["{{base_url}}"], "path": ["locations"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mappings\": {\n    \"properties\": {\n      \"name\": { \"type\": \"text\" },\n      \"location\": { \"type\": \"geo_point\" },\n      \"type\": { \"type\": \"keyword\" }\n    }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Index Sample Locations (Bulk)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_bulk?refresh=true", "host": ["{{base_url}}"], "path": ["_bulk"], "query": [{ "key": "refresh", "value": "true" }] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"index\":{\"_index\":\"locations\",\"_id\":\"1\"}}\n{\"name\":\"Central Park Coffee Shop\",\"location\":{\"lat\":40.7829,\"lon\":-73.9654},\"type\":\"cafe\"}\n{\"index\":{\"_index\":\"locations\",\"_id\":\"2\"}}\n{\"name\":\"Brooklyn Roasters\",\"location\":{\"lat\":40.6892,\"lon\":-73.9857},\"type\":\"cafe\"}\n{\"index\":{\"_index\":\"locations\",\"_id\":\"3\"}}\n{\"name\":\"Times Square Deli\",\"location\":{\"lat\":40.7580,\"lon\":-73.9855},\"type\":\"restaurant\"}\n{\"index\":{\"_index\":\"locations\",\"_id\":\"4\"}}\n{\"name\":\"SoHo Coffee House\",\"location\":{\"lat\":40.7233,\"lon\":-74.0030},\"type\":\"cafe\"}\n"
+            }
+          }
+        },
+        {
+          "name": "Register product_search Template",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_scripts/product_search", "host": ["{{base_url}}"], "path": ["_scripts", "product_search"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": {\n    \"lang\": \"mustache\",\n    \"source\": \"{\\\"query\\\":{\\\"bool\\\":{\\\"must\\\":[{\\\"match\\\":{\\\"title\\\":\\\"{{query_text}}\\\"}}]{{#category}},\\\"filter\\\":[{\\\"term\\\":{\\\"category\\\":\\\"{{category}}\\\"}}]{{/category}}}},\\\"from\\\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\\\"size\\\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Register log_search Template",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_scripts/log_search", "host": ["{{base_url}}"], "path": ["_scripts", "log_search"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": {\n    \"lang\": \"mustache\",\n    \"source\": \"{\\\"query\\\":{\\\"bool\\\":{\\\"must\\\":[{\\\"range\\\":{\\\"timestamp\\\":{\\\"gte\\\":\\\"{{start_date}}\\\",\\\"lte\\\":\\\"{{end_date}}\\\"}}}{{#level}},{\\\"term\\\":{\\\"level\\\":\\\"{{level}}\\\"}}{{/level}}]}},\\\"size\\\":{{#size}}{{size}}{{/size}}{{^size}}50{{/size}}}\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Register geo_search Template",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_scripts/geo_search", "host": ["{{base_url}}"], "path": ["_scripts", "geo_search"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": {\n    \"lang\": \"mustache\",\n    \"source\": \"{\\\"query\\\":{\\\"bool\\\":{\\\"must\\\":[{\\\"match\\\":{\\\"name\\\":\\\"{{search_text}}\\\"}}],\\\"filter\\\":[{\\\"geo_distance\\\":{\\\"distance\\\":\\\"{{radius}}\\\",\\\"location\\\":{\\\"lat\\\":{{lat}},\\\"lon\\\":{{lon}}}}}]}},\\\"size\\\":{{#size}}{{size}}{{/size}}{{^size}}10{{/size}}}\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Register test-rbac-template",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_scripts/test-rbac-template", "host": ["{{base_url}}"], "path": ["_scripts", "test-rbac-template"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": {\n    \"lang\": \"mustache\",\n    \"source\": \"{\\\"query\\\":{\\\"match\\\":{\\\"{{field}}\\\":\\\"{{value}}\\\"}}}\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC Setup",
+      "description": "Create test users, roles, and role mappings for RBAC testing.",
+      "item": [
+        {
+          "name": "Create ML Custom Tool Role",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_security/api/roles/ml_custom_tool_role", "host": ["{{base_url}}"], "path": ["_plugins", "_security", "api", "roles", "ml_custom_tool_role"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cluster_permissions\": [\"cluster_monitor\", \"cluster:admin/opensearch/ml/*\", \"cluster:admin/script/get\"],\n  \"index_permissions\": [\n    {\n      \"index_patterns\": [\".plugins-ml-*\"],\n      \"allowed_actions\": [\"crud\", \"indices_monitor\"]\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Create User1 (role_a)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_security/api/internalusers/user1", "host": ["{{base_url}}"], "path": ["_plugins", "_security", "api", "internalusers", "user1"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{user1_pass}}\",\n  \"backend_roles\": [\"role_a\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Create User2 (role_b)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_security/api/internalusers/user2", "host": ["{{base_url}}"], "path": ["_plugins", "_security", "api", "internalusers", "user2"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{user2_pass}}\",\n  \"backend_roles\": [\"role_b\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Map Users to Role",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_security/api/rolesmapping/ml_custom_tool_role", "host": ["{{base_url}}"], "path": ["_plugins", "_security", "api", "rolesmapping", "ml_custom_tool_role"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backend_roles\": [\"role_a\", \"role_b\"],\n  \"users\": [\"user1\", \"user2\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Enable Custom Tool Access Control",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_cluster/settings", "host": ["{{base_url}}"], "path": ["_cluster", "settings"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"persistent\": {\n    \"plugins.ml_commons.custom_tool_access_control_enabled\": true\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Disable Custom Tool Access Control",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_cluster/settings", "host": ["{{base_url}}"], "path": ["_cluster", "settings"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"persistent\": {\n    \"plugins.ml_commons.custom_tool_access_control_enabled\": false\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "LLM Enrichment Setup",
+      "description": "Register and deploy a Bedrock Claude model for Tier 2 (AST + LLM) tool creation and agent integration.\n\nSet collection variables {{aws_access_key}}, {{aws_secret_key}}, {{aws_session_token}} before running.",
+      "item": [
+        {
+          "name": "Register Bedrock Model",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.model_id) {",
+                  "  pm.collectionVariables.set('model_id', json.model_id);",
+                  "  console.log('model_id: ' + json.model_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/_plugins/_ml/models/_register",
+              "host": ["{{base_url}}"],
+              "path": ["_plugins", "_ml", "models", "_register"]
+            },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sonnet 4 - Custom Tools Test\",\n  \"function_name\": \"remote\",\n  \"description\": \"Bedrock Claude model for custom tools agent testing\",\n  \"connector\": {\n    \"name\": \"Amazon Bedrock Claude connector\",\n    \"description\": \"Connector to Amazon Bedrock service for the Claude model\",\n    \"version\": 1,\n    \"protocol\": \"aws_sigv4\",\n    \"parameters\": {\n      \"region\": \"us-east-1\",\n      \"service_name\": \"bedrock\",\n      \"model\": \"us.anthropic.claude-sonnet-4-20250514-v1:0\"\n    },\n    \"credential\": {\n      \"access_key\": \"{{aws_access_key}}\",\n      \"secret_key\": \"{{aws_secret_key}}\",\n      \"session_token\": \"{{aws_session_token}}\"\n    },\n    \"actions\": [\n      {\n        \"action_type\": \"predict\",\n        \"method\": \"POST\",\n        \"url\": \"https://bedrock-runtime.${parameters.region}.amazonaws.com/model/${parameters.model}/converse\",\n        \"headers\": { \"content-type\": \"application/json\" },\n        \"request_body\": \"{ \\\"system\\\": [{\\\"text\\\": \\\"${parameters.system_prompt}\\\"}], \\\"messages\\\": [${parameters._chat_history:-}{\\\"role\\\":\\\"user\\\",\\\"content\\\":[{\\\"text\\\":\\\"${parameters.prompt}\\\"}]}${parameters._interactions:-}]${parameters.tool_configs:-} }\"\n      }\n    ]\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Deploy Model",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/models/{{model_id}}/_deploy", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "models", "{{model_id}}", "_deploy"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Verify Model Deployed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/models/{{model_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "models", "{{model_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Custom Tools CRUD",
+      "description": "Create, Read, Update, Delete custom tools.",
+      "item": [
+        {
+          "name": "Create Tool — Tier 1 (AST auto-extract)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  if (json.tool_id) pm.collectionVariables.set('tool_id', json.tool_id);",
+                  "  if (json._id) pm.collectionVariables.set('tool_id', json._id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ProductSearch\",\n  \"description\": \"Search products by title with optional category filter and pagination\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"product_search\",\n  \"index\": \"products\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Tool — Tier 2 (AST + LLM)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"LogSearch\",\n  \"description\": \"Search logs by date range with optional level filter\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"log_search\",\n  \"index\": \"logs\",\n  \"model_id\": \"{{model_id}}\",\n  \"llm_interface\": \"bedrock/converse/claude\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Tool — Tier 3 (Manual params)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"GeoSearch\",\n  \"description\": \"Search locations by name within a geographic radius\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"geo_search\",\n  \"index\": \"locations\",\n  \"params\": {\n    \"search_text\": { \"type\": \"string\", \"description\": \"Search text for location name\", \"required\": true },\n    \"radius\": { \"type\": \"string\", \"description\": \"Search radius (e.g., '10km')\", \"required\": true },\n    \"lat\": { \"type\": \"number\", \"description\": \"Latitude of center point\", \"required\": true },\n    \"lon\": { \"type\": \"number\", \"description\": \"Longitude of center point\", \"required\": true },\n    \"size\": { \"type\": \"number\", \"description\": \"Max results to return\", \"required\": false, \"default\": \"10\" }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Tool by Name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/ProductSearch", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "ProductSearch"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "List All Tools (built-in + custom)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Update Tool",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated description for ProductSearch tool\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Tool",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tool Execution",
+      "description": "Execute custom tools via the Execute API.",
+      "item": [
+        {
+          "name": "Execute ProductSearch (basic)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ProductSearch\",\n  \"parameters\": {\n    \"query_text\": \"wireless headphones\",\n    \"size\": \"5\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute ProductSearch (with category filter)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ProductSearch\",\n  \"parameters\": {\n    \"query_text\": \"laptop\",\n    \"category\": \"electronics\",\n    \"size\": \"3\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute GeoSearch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"GeoSearch\",\n  \"parameters\": {\n    \"search_text\": \"coffee shop\",\n    \"radius\": \"5km\",\n    \"lat\": \"40.7128\",\n    \"lon\": \"-74.0060\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute LogSearch (Tier 2)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"LogSearch\",\n  \"parameters\": {\n    \"start_date\": \"2024-01-01\",\n    \"end_date\": \"2024-12-31\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute (backward compat — direct template name)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"parameters\": {\n    \"search_template_name\": \"product_search\",\n    \"query_text\": \"tablet\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute (non-existent tool — expect error)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"NonExistentTool\",\n  \"parameters\": {\n    \"query_text\": \"test\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute (missing required param — expect error)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_execute/SearchTemplateTool", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_execute", "SearchTemplateTool"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"GeoSearch\",\n  \"parameters\": {\n    \"search_text\": \"park\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — Private Access",
+      "description": "Test PRIVATE access mode: only the owner can see and modify.",
+      "item": [
+        {
+          "name": "user1 creates PRIVATE tool",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  if (json._id) pm.collectionVariables.set('tool_id', json._id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"rbac_private_tool\",\n  \"description\": \"Private tool owned by user1\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"private\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user1 lists tools (sees private tool)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] }
+          }
+        },
+        {
+          "name": "user2 lists tools (should NOT see private tool)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] }
+          }
+        },
+        {
+          "name": "user2 tries to update (expect 403)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"hacked by user2\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user2 tries to delete (expect 403)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] }
+          }
+        },
+        {
+          "name": "user1 updates own tool (expect 200)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated by owner\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user1 deletes own tool (expect 200)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — Public Access",
+      "description": "Test PUBLIC access mode: everyone can see, only owner can modify.",
+      "item": [
+        {
+          "name": "user1 creates PUBLIC tool",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  if (json._id) pm.collectionVariables.set('tool_id', json._id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"rbac_public_tool\",\n  \"description\": \"Public tool created by user1\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"public\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user2 lists tools (should see public tool)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] }
+          }
+        },
+        {
+          "name": "user2 tries to update (expect 403)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"hacked by user2\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user2 tries to delete (expect 403)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — Restricted Access",
+      "description": "Test RESTRICTED access mode: only users with matching backend roles can see.",
+      "item": [
+        {
+          "name": "user1 creates RESTRICTED tool (role_a)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  if (json._id) pm.collectionVariables.set('tool_id', json._id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"rbac_restricted_tool_a\",\n  \"description\": \"Restricted to role_a users\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"restricted\",\n  \"backend_roles\": [\"role_a\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "user1 lists tools (sees restricted tool)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] }
+          }
+        },
+        {
+          "name": "user2 lists tools (should NOT see role_a tool)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] }
+          }
+        },
+        {
+          "name": "user2 tries to update (expect 403)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user2}}" }, { "key": "password", "value": "{{user2_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"hacked\"\n}"
+            }
+          }
+        },
+        {
+          "name": "user1 creates RESTRICTED tool (add_all_backend_roles)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"rbac_restricted_all_roles\",\n  \"description\": \"Restricted to all of user1's roles\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"add_all_backend_roles\": true\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — Admin Override",
+      "description": "Admin bypasses all access control checks.",
+      "item": [
+        {
+          "name": "admin lists all tools",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "admin updates any tool",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated by admin\"\n}"
+            }
+          }
+        },
+        {
+          "name": "admin deletes any tool",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/{{tool_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "{{tool_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — Validation Edge Cases",
+      "description": "Invalid parameter combinations that should be rejected (expect 400).",
+      "item": [
+        {
+          "name": "PUBLIC + backend_roles (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_public_with_roles\",\n  \"description\": \"Invalid combo\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"public\",\n  \"backend_roles\": [\"role_a\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "PRIVATE + backend_roles (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_private_with_roles\",\n  \"description\": \"Invalid combo\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"private\",\n  \"backend_roles\": [\"role_a\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "RESTRICTED without backend_roles (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_restricted_no_roles\",\n  \"description\": \"Invalid combo\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"restricted\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Admin + add_all_backend_roles (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_admin_all_roles\",\n  \"description\": \"Invalid for admin\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"add_all_backend_roles\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "User specifying roles they don't have (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_wrong_role\",\n  \"description\": \"User1 does not have role_b\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"restricted\",\n  \"backend_roles\": [\"role_b\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "RBAC params when AC disabled (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/tools/_create", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "tools", "_create"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{user1}}" }, { "key": "password", "value": "{{user1_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"should_fail_ac_disabled\",\n  \"description\": \"AC disabled test\",\n  \"type\": \"search_template\",\n  \"search_template_name\": \"test-rbac-template\",\n  \"access\": \"public\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agent Integration",
+      "description": "Register agents with custom tools and execute them.",
+      "item": [
+        {
+          "name": "Register Chat Agent with ProductSearch",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  if (json.agent_id) pm.collectionVariables.set('chat_agent_id', json.agent_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/_register", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "_register"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"TestChat_CustomTools\",\n  \"type\": \"conversational\",\n  \"description\": \"Chat agent for testing custom SearchTemplateTool resolution\",\n  \"tools\": [\n    { \"type\": \"SearchTemplateTool\", \"name\": \"ProductSearch\" },\n    { \"type\": \"ListIndexTool\" }\n  ],\n  \"llm\": {\n    \"model_id\": \"{{model_id}}\",\n    \"parameters\": { \"prompt\": \"${parameters.question}\" }\n  },\n  \"parameters\": { \"_llm_interface\": \"bedrock/converse/claude\" },\n  \"memory\": { \"type\": \"conversation_index\" }\n}"
+            }
+          }
+        },
+        {
+          "name": "Register PER Agent with ProductSearch",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  if (json.agent_id) pm.collectionVariables.set('per_agent_id', json.agent_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/_register", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "_register"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"TestPER_CustomTools\",\n  \"type\": \"PLAN_EXECUTE_AND_REFLECT\",\n  \"description\": \"PER agent for testing custom SearchTemplateTool resolution\",\n  \"tools\": [\n    { \"type\": \"SearchTemplateTool\", \"name\": \"ProductSearch\" },\n    { \"type\": \"ListIndexTool\" }\n  ],\n  \"llm\": {\n    \"model_id\": \"{{model_id}}\",\n    \"parameters\": { \"prompt\": \"${parameters.question}\" }\n  },\n  \"parameters\": { \"_llm_interface\": \"bedrock/converse/claude\" },\n  \"memory\": { \"type\": \"conversation_index\" }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute Chat Agent — find headphones",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/{{chat_agent_id}}/_execute", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "{{chat_agent_id}}", "_execute"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"parameters\": {\n    \"question\": \"Find me wireless headphones\",\n    \"verbose\": \"true\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute Chat Agent — electronics charging",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/{{chat_agent_id}}/_execute", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "{{chat_agent_id}}", "_execute"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"parameters\": {\n    \"question\": \"Search for electronics products related to charging\",\n    \"verbose\": \"true\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute PER Agent — running shoes",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/{{per_agent_id}}/_execute", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "{{per_agent_id}}", "_execute"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"parameters\": {\n    \"question\": \"What running shoes are available in the products catalog?\",\n    \"verbose\": \"true\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Execute Chat Agent — no tool needed",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/agents/{{chat_agent_id}}/_execute", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "agents", "{{chat_agent_id}}", "_execute"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"parameters\": {\n    \"question\": \"What is 2 + 2?\",\n    \"verbose\": \"true\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "MCP Server",
+      "description": "MCP (Model Context Protocol) server integration — tool discovery and invocation via JSON-RPC 2.0.",
+      "item": [
+        {
+          "name": "Enable MCP Server",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_cluster/settings", "host": ["{{base_url}}"], "path": ["_cluster", "settings"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"persistent\": {\n    \"plugins.ml_commons.mcp_server_enabled\": \"true\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Register ProductSearch as MCP Tool",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp/tools/_register", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp", "tools", "_register"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tools\": [\n    {\n      \"type\": \"SearchTemplateTool\",\n      \"name\": \"ProductSearch\",\n      \"description\": \"Search for products by title keywords\",\n      \"parameters\": { \"name\": \"ProductSearch\" }\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "MCP Initialize",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-03-26\",\n    \"capabilities\": { \"roots\": { \"listChanged\": true }, \"sampling\": {} },\n    \"clientInfo\": { \"name\": \"postman-test\", \"version\": \"1.0.0\" }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "MCP Initialized Notification",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"notifications/initialized\",\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "MCP List Tools",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"tools/list\",\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "MCP Call ProductSearch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"ProductSearch\",\n    \"arguments\": {\n      \"query_text\": \"headphones\"\n    }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "MCP Call ProductSearch (with category)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/mcp", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "mcp"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"ProductSearch\",\n    \"arguments\": {\n      \"query_text\": \"cable\",\n      \"category\": \"electronics\"\n    }\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Delete test artifacts.",
+      "item": [
+        {
+          "name": "Undeploy Model",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/models/{{model_id}}/_undeploy", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "models", "{{model_id}}", "_undeploy"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete Model",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_plugins/_ml/models/{{model_id}}", "host": ["{{base_url}}"], "path": ["_plugins", "_ml", "models", "{{model_id}}"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete Custom Tools Index",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/.plugins-ml-custom-tools", "host": ["{{base_url}}"], "path": [".plugins-ml-custom-tools"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete Products Index",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/products", "host": ["{{base_url}}"], "path": ["products"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete Logs Index",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/logs", "host": ["{{base_url}}"], "path": ["logs"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete Locations Index",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/locations", "host": ["{{base_url}}"], "path": ["locations"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete product_search Template",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_scripts/product_search", "host": ["{{base_url}}"], "path": ["_scripts", "product_search"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        },
+        {
+          "name": "Delete test-rbac-template",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/_scripts/test-rbac-template", "host": ["{{base_url}}"], "path": ["_scripts", "test-rbac-template"] },
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{admin_user}}" }, { "key": "password", "value": "{{admin_pass}}" }] }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -6,9 +6,12 @@
 package org.opensearch.ml.engine.tools;
 
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.common.util.concurrent.ThreadContext;
+import org.opensearch.commons.ConfigConstants;
+import org.opensearch.commons.authuser.User;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.ml.common.CommonValue;
@@ -45,18 +48,31 @@ public class CustomToolResolver {
     }
 
     private final Client client;
+    private BiConsumer<User, Map<String, Object>> accessChecker;
 
     public CustomToolResolver(Client client) {
         this.client = client;
     }
 
     /**
+     * Set an access checker that validates a user has permission to use a resolved tool.
+     * The BiConsumer should throw an exception if access is denied.
+     */
+    public void setAccessChecker(BiConsumer<User, Map<String, Object>> accessChecker) {
+        this.accessChecker = accessChecker;
+    }
+
+    /**
      * Resolves a pre-registered tool by name from the custom tools index.
+     * If an access checker is configured, validates the current user's permissions.
      *
      * @param name the name of the tool to resolve
      * @param listener the listener to notify with the tool definition or error
      */
     public void resolve(String name, ActionListener<Map<String, Object>> listener) {
+        // Capture user before stashing context (stash clears transients)
+        User user = accessChecker != null ? getUserFromThreadContext() : null;
+
         try (ThreadContext.StoredContext context = client.threadPool().getThreadContext().stashContext()) {
             SearchRequest searchRequest = new SearchRequest(CommonValue.ML_CUSTOM_TOOLS_INDEX);
             searchRequest.source(new SearchSourceBuilder().query(QueryBuilders.termQuery("name.keyword", name)).size(1));
@@ -64,7 +80,16 @@ public class CustomToolResolver {
             client.search(searchRequest, ActionListener.wrap(searchResponse -> {
                 context.restore();
                 if (searchResponse.getHits().getTotalHits().value() > 0) {
-                    listener.onResponse(searchResponse.getHits().getHits()[0].getSourceAsMap());
+                    Map<String, Object> toolDef = searchResponse.getHits().getHits()[0].getSourceAsMap();
+                    if (accessChecker != null) {
+                        try {
+                            accessChecker.accept(user, toolDef);
+                        } catch (Exception e) {
+                            listener.onFailure(e);
+                            return;
+                        }
+                    }
+                    listener.onResponse(toolDef);
                 } else {
                     listener.onFailure(new IllegalArgumentException("Pre-registered tool not found: " + name));
                 }
@@ -74,5 +99,13 @@ public class CustomToolResolver {
                 listener.onFailure(e);
             }));
         }
+    }
+
+    private User getUserFromThreadContext() {
+        String userStr = client.threadPool().getThreadContext().getTransient(ConfigConstants.OPENSEARCH_SECURITY_USER_INFO_THREAD_CONTEXT);
+        if (userStr == null) {
+            return null;
+        }
+        return User.parse(userStr);
     }
 }
