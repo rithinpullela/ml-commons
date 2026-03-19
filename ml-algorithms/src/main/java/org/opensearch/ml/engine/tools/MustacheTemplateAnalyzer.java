@@ -111,6 +111,16 @@ public class MustacheTemplateAnalyzer {
             } else if (code instanceof IterableCode) {
                 handleIterableCode(code, name, params, depth, parentSection, precedingText);
             } else if (code instanceof NotIterableCode) {
+                // Register the inverted section name as a parameter so that
+                // standalone {{^var}}default{{/var}} (with no {{var}} elsewhere)
+                // is not silently dropped during the inverted-default merge.
+                if (name != null && !name.isEmpty()) {
+                    ParamInfo info = params.computeIfAbsent(name, ParamInfo::new);
+                    info.minScopeDepth = Math.min(info.minScopeDepth, depth);
+                    if (depth == 0) {
+                        info.appearsAtRootScope = true;
+                    }
+                }
                 walkCodes(code.getCodes(), params, depth, parentSection, null);
             } else {
                 walkCodes(code.getCodes(), params, depth, parentSection, precedingText);
@@ -123,6 +133,15 @@ public class MustacheTemplateAnalyzer {
 
     private static void handleValueCode(String name, Map<String, ParamInfo> params, int depth, String parentSection, String precedingText) {
         if (".".equals(name)) {
+            // {{.}} is the implicit iterator — the parent section is being iterated
+            // as an array, not used as a boolean guard.
+            if (parentSection != null) {
+                ParamInfo parentInfo = params.get(parentSection);
+                if (parentInfo != null) {
+                    parentInfo.isArrayType = true;
+                    parentInfo.isSectionControllerOnly = false;
+                }
+            }
             return;
         }
 

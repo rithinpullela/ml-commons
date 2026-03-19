@@ -44,24 +44,38 @@ OpenSearch search templates use the Mustache templating language. The full Musta
 
 OpenSearch's `toJson` helper serializes arrays/objects to JSON. The variable name appears as **bare text** between section tags, not wrapped in `{{ }}`:
 
-```json
-{"query":{"terms":{"tags": {{#toJson}}tags{{/toJson}} }}}
+```mustache
+{
+  "query": {
+    "terms": {
+      "tags": {{#toJson}}tags{{/toJson}}
+    }
+  }
+}
 ```
 
 The regex sees `{{#toJson}}` (excluded by `#`) and `{{/toJson}}` (excluded by `/`), but **completely misses `tags`** — the actual parameter. This is one of the most commonly used patterns for array parameters.
 
 The `join` helper has the same problem:
 
-```json
-{"query":{"match":{"emails":"{{#join}}emails{{/join}}"}}}
+```mustache
+{
+  "query": {
+    "match": {
+      "emails": "{{#join}}emails{{/join}}"
+    }
+  }
+}
 ```
 
 #### Blocker 2: `{{{variable}}}` — Triple Braces (Unescaped Output)
 
 Triple braces mean "inject raw JSON without escaping." Used when passing entire JSON objects/arrays:
 
-```json
-{"query": {{{my_query}}}}
+```mustache
+{
+  "query": {{{my_query}}}
+}
 ```
 
 The regex matches `{{{my_query}}}` but captures it incorrectly — the greedy/lazy behavior produces `{my_query}` or leaves a trailing `}`. The variable name extraction is unreliable.
@@ -70,9 +84,21 @@ The regex matches `{{{my_query}}}` but captures it incorrectly — the greedy/la
 
 Sections are conditionals. The section controller variable (e.g., `genre` in `{{#genre}}...{{/genre}}`) is itself a parameter — it determines whether the block renders. But the regex **excludes all `{{#...}}` tags**, so section-only parameters are invisible:
 
-```json
-{"query":{"bool":{"must":[{"match":{"title":"{{query}}"}}]
-  {{#genre}},"filter":[{"term":{"genre":"{{genre}}"}}]{{/genre}}}}}
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "title": "{{query}}" } }
+      ]
+      {{#genre}},
+      "filter": [
+        { "term": { "genre": "{{genre}}" } }
+      ]
+      {{/genre}}
+    }
+  }
+}
 ```
 
 Here `genre` appears both as a section controller AND as a variable inside the section. If it only appeared as a controller (common in boolean flag patterns like `{{#include_highlights}}...{{/include_highlights}}`), the regex would miss it entirely.
@@ -81,8 +107,15 @@ Here `genre` appears both as a section controller AND as a variable inside the s
 
 Mustache allows changing tag delimiters. After `{{=<% %>=}}`, all variables use `<% %>` syntax:
 
-```json
-{{=<% %>=}}{"query":{"match":{"title":"<% query %>"}}}
+```mustache
+{{=<% %>=}}
+{
+  "query": {
+    "match": {
+      "title": "<% query %>"
+    }
+  }
+}
 ```
 
 The regex sees `{{=<% %>=}}` as a false positive, then **misses every subsequent variable** because they no longer use `{{ }}`.
@@ -91,8 +124,13 @@ The regex sees `{{=<% %>=}}` as a false positive, then **misses every subsequent
 
 Variables inside sections may refer to object fields, not root parameters:
 
-```json
-{{#user}}{"name":"{{name}}","email":"{{email}}"}{{/user}}
+```mustache
+{{#user}}
+{
+  "name": "{{name}}",
+  "email": "{{email}}"
+}
+{{/user}}
 ```
 
 Is `name` a root parameter or a field on the `user` object? The regex has no scope tracking, so it can't tell.
@@ -295,13 +333,27 @@ void classifyParams(AnalysisResult result) {
 }
 ```
 
-### 4.3 Walkthrough: Shakespeare Search Template
+### 4.3 Walkthrough: Product Search Template
 
 **Template:**
-```
-{"query":{"bool":{"must":[{"match":{"title":"{{query_text}}"}}]
-{{#genre}},"filter":[{"term":{"genre":"{{genre}}"}}]{{/genre}}}},
-"size":{{result_size}}}
+
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "title": "{{query_text}}" } }
+      ]
+      {{#category}},
+      "filter": [
+        { "term": { "category.keyword": "{{category}}" } }
+      ]
+      {{/category}}
+    }
+  },
+  "from": {{from}}{{^from}}0{{/from}},
+  "size": {{size}}{{^size}}10{{/size}}
+}
 ```
 
 **AST after compilation:**
@@ -311,37 +363,10 @@ DefaultMustache (root)
 ├── WriteCode: '{"query":{"bool":{"must":[{"match":{"title":"'
 ├── ValueCode: name="query_text"                                    ← scope 0
 ├── WriteCode: '"}}]'
-├── IterableCode: name="genre"                                      ← scope 0, section controller
-│   ├── WriteCode: ',"filter":[{"term":{"genre":"'
-│   ├── ValueCode: name="genre"                                     ← scope 1, inside {{#genre}}
+├── IterableCode: name="category"                                   ← scope 0, section controller
+│   ├── WriteCode: ',"filter":[{"term":{"category.keyword":"'
+│   ├── ValueCode: name="category"                                  ← scope 1, inside {{#category}}
 │   └── WriteCode: '"}}]'
-├── WriteCode: '}},"size":'
-├── ValueCode: name="result_size"                                   ← scope 0
-└── WriteCode: '}'
-```
-
-**Classification:**
-
-| Param | How discovered | Scope | Classification |
-|---|---|---|---|
-| `query_text` | `ValueCode` at scope 0 | Root | **required** — root scope, no fallback |
-| `genre` | `IterableCode` controller at scope 0 + `ValueCode` at scope 1 inside own section | Self-guarding | **optional** — only appears inside `{{#genre}}` |
-| `result_size` | `ValueCode` at scope 0 | Root | **required** — root scope, no fallback |
-
-### 4.4 Walkthrough: Template with toJson and Defaults
-
-**Template:**
-```
-{"query":{"terms":{"tags":{{#toJson}}tags{{/toJson}}}},
-"from":{{from}}{{^from}}0{{/from}},"size":{{size}}{{^size}}10{{/size}}}
-```
-
-**AST after compilation:**
-
-```
-DefaultMustache (root)
-├── WriteCode: '{"query":{"terms":{"tags":'
-├── ToJsonCode: name="tags"                                         ← scope 0, helper
 ├── WriteCode: '}},"from":'
 ├── ValueCode: name="from"                                          ← scope 0
 ├── NotIterableCode: name="from"                                    ← inverted section
@@ -355,36 +380,86 @@ DefaultMustache (root)
 
 **Classification:**
 
+| Param | How discovered | Scope | Classification |
+|---|---|---|---|
+| `query_text` | `ValueCode` at scope 0 | Root | **required** — root scope, no fallback |
+| `category` | `IterableCode` controller at scope 0 + `ValueCode` at scope 1 inside own section | Self-guarding | **optional** — only appears inside `{{#category}}` |
+| `from` | `ValueCode` at scope 0 + `NotIterableCode` with default `0` | Root + default | **optional** — has inverted section default |
+| `size` | `ValueCode` at scope 0 + `NotIterableCode` with default `10` | Root + default | **optional** — has inverted section default |
+
+### 4.4 Walkthrough: Template with toJson and Defaults
+
+**Template:**
+
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "terms": { "tags": {{#toJson}}tags{{/toJson}} } }
+      ]
+      {{#author}},
+      "filter": [
+        { "term": { "author": "{{author}}" } }
+      ]
+      {{/author}}
+    }
+  },
+  "size": {{size}}{{^size}}10{{/size}}
+}
+```
+
+**AST after compilation:**
+
+```
+DefaultMustache (root)
+├── WriteCode: '{"query":{"bool":{"must":[{"terms":{"tags":'
+├── ToJsonCode: name="tags"                                         ← scope 0, helper
+├── WriteCode: '}}]'
+├── IterableCode: name="author"                                     ← scope 0, section controller
+│   ├── WriteCode: ',"filter":[{"term":{"author":"'
+│   ├── ValueCode: name="author"                                    ← scope 1, inside {{#author}}
+│   └── WriteCode: '"}}]'
+├── WriteCode: '}},"size":'
+├── ValueCode: name="size"                                          ← scope 0
+├── NotIterableCode: name="size"                                    ← inverted section
+│   └── WriteCode: '10'
+└── WriteCode: '}'
+```
+
+**Classification:**
+
 | Param | How discovered | Classification |
 |---|---|---|
 | `tags` | `ToJsonCode` (regex would have **missed** this) | **required** — root scope, no fallback, array type |
-| `from` | `ValueCode` + `NotIterableCode` with default `0` | **optional** — has inverted section default |
+| `author` | `IterableCode` controller + `ValueCode` inside own section | **optional** — self-guarding |
 | `size` | `ValueCode` + `NotIterableCode` with default `10` | **optional** — has inverted section default |
 
 ---
 
-## 5. Three Tiers of Parameter Specification
+## 5. Three Modes of Parameter Specification
 
-The creation API supports three mutually exclusive modes. Each successive tier adds more intelligence but also more complexity/latency.
+The creation API supports three mutually exclusive modes. Each successive mode adds more intelligence but also more complexity/latency.
 
-### 5.1 Tier Overview
+### 5.1 Mode Overview
 
-| Tier | What user provides | Params extracted by | Descriptions generated by | Type inferred by |
+| Mode | What user provides | Params extracted by | Descriptions generated by | Type inferred by |
 |---|---|---|---|---|
-| **Tier 1: Auto (no LLM)** | Neither `params` nor `model_id` | AST walker | Programmatic defaults from DSL context | Heuristic from AST context |
-| **Tier 2: Auto + LLM** | `model_id` only | AST walker | LLM | LLM |
-| **Tier 3: Manual** | `params` | User | User | User |
+| **Mode 1: Auto (no LLM)** | Neither `params` nor `model_id` | AST walker | Programmatic defaults from DSL context | Heuristic from AST context |
+| **Mode 2: Auto + LLM** | `model_id` + `llm_interface` | AST walker | LLM (via forced tool call) | Heuristic from AST (LLM does not override types) |
+| **Mode 3: Manual** | `params` | User | User | User |
 
-### 5.2 Tier 1: Programmatic Extraction with Default Descriptions
+### 5.2 Mode 1: Programmatic Extraction with Default Descriptions
 
 **Request:**
+
 ```json
 POST /_plugins/_ml/tools/_create
 {
-  "name": "ShakespeareSearchTool",
-  "description": "Search Shakespeare plays by title, optionally filter by genre",
+  "name": "ProductSearch",
+  "description": "Search products by title with optional category filter",
   "type": "search_template",
-  "search_template_name": "shakespeare_search"
+  "search_template_name": "product_search_v2"
 }
 ```
 
@@ -405,140 +480,257 @@ No `params`, no `model_id`. The system does everything programmatically.
 | AST context | Inferred type | Rationale |
 |---|---|---|
 | `ValueCode` inside quotes: `"field":"{{var}}"` | `string` | Quoted value in DSL = text |
-| `ValueCode` unquoted: `"size":{{var}}` | `integer` | Bare value in size/from context = numeric |
+| `ValueCode` unquoted: `"size":{{var}}` | `number` | Bare value in size/from context = numeric |
 | `ToJsonCode` | `array` | toJson is used for array/object injection |
 | `JoinerCode` | `array` | join concatenates list elements |
+| Section controller with no inner value usage | `boolean` | Acts as a conditional guard |
 | Everything else | `string` | Safe default |
 
 To determine quoted vs. unquoted, we look at the `WriteCode` node immediately preceding the `ValueCode` in the AST. If it ends with `"`, the variable is quoted (string). If it ends with `:` or a digit context, it's unquoted (numeric).
 
-**Default description generation (no LLM needed):**
+**Actual response (tested against running cluster):**
 
-Built from the variable name and its DSL context:
-
-| Variable name | DSL context (from surrounding WriteCode) | Generated description |
-|---|---|---|
-| `query_text` | `"match":{"title":"{{query_text}}"}` | `"Value for the 'title' field (match query)"` |
-| `genre` | `"term":{"genre":"{{genre}}"}` | `"Value for the 'genre' field (term filter)"` |
-| `result_size` | `"size":{{result_size}}` | `"Value for 'size'"` |
-| `tags` | `"terms":{"tags":{{#toJson}}tags{{/toJson}}}` | `"Value for the 'tags' field (terms query, array)"` |
-
-These defaults are functional but not elegant. They tell the LLM enough to use the tool correctly. For better descriptions, use Tier 2.
-
-**Response:**
 ```json
 {
-  "tool_id": "abc123",
+  "tool_id": "uaG2Bp0BXkQCQSaYzA9b",
   "params": {
-    "query_text":  { "type": "string",  "description": "Value for the 'title' field (match query)",      "required": true  },
-    "genre":       { "type": "string",  "description": "Value for the 'genre' field (term filter)",      "required": false },
-    "result_size": { "type": "integer", "description": "Value for 'size'",                               "required": true  }
+    "query_text": {
+      "type": "string",
+      "description": "Value for the 'title' field (match)",
+      "required": true
+    },
+    "category": {
+      "type": "string",
+      "description": "Value for the 'category.keyword' field (term)",
+      "required": false
+    },
+    "from": {
+      "type": "number",
+      "description": "Value for the 'from' field",
+      "required": false,
+      "default": "0"
+    },
+    "size": {
+      "type": "number",
+      "description": "Value for the 'size' field",
+      "required": false,
+      "default": "10"
+    }
   }
 }
 ```
 
 **Latency:** ~10ms (compile + walk, no network calls)
 
-### 5.3 Tier 2: LLM-Enhanced Descriptions
+### 5.3 Mode 2: LLM-Enhanced Descriptions
 
 **Request:**
+
 ```json
 POST /_plugins/_ml/tools/_create
 {
-  "name": "ShakespeareSearchTool",
-  "description": "Search Shakespeare plays by title, optionally filter by genre",
+  "name": "ProductSearch",
+  "description": "Search products by title with optional category filter",
   "type": "search_template",
-  "search_template_name": "shakespeare_search",
-  "model_id": "haiku-model-id"
+  "search_template_name": "product_search_v2",
+  "model_id": "wKG4Bp0BXkQCQSaYUQ97",
+  "llm_interface": "bedrock/converse/claude"
 }
 ```
 
-`model_id` provided → Phase 1 (AST extraction) runs as in Tier 1, then Phase 2 calls the LLM for better types and descriptions.
+`model_id` + `llm_interface` provided → Phase 1 (AST extraction) runs as in Mode 1, then Phase 2 calls the LLM via a forced tool call to get better descriptions.
 
 **What happens:**
 
-1. Steps 1-4 from Tier 1 (AST extraction, classification)
-2. Build prompt with template source + extracted variable names + their AST context
-3. Call LLM via `MachineLearningNodeClient.predict()`
-4. Parse LLM response → merge types and descriptions over Phase 1 defaults
-5. **Required/optional stays from Phase 1** — the LLM does NOT determine requiredness (it's structural, not semantic)
-6. Store and return
+1. Steps 1-6 from Mode 1 (AST extraction, classification, heuristic types/descriptions)
+2. Build a dynamic JSON Schema with one string property per parameter
+3. Build a user prompt with template source + extracted variable names + their AST context
+4. Configure function calling for the specified `llm_interface`
+5. Force a tool call via `tool_choice: required` (Bedrock: `toolChoice: {any: {}}`)
+6. Call LLM via `MLPredictionTaskAction` with the rendered tool definition
+7. Parse tool call response → extract description strings per parameter
+8. **Merge:** LLM provides descriptions only; required/optional, defaults, and types stay from Phase 1
+9. Store and return
 
-**LLM Prompt:**
+**Key design choice:** The LLM does not determine types or requiredness — those are structural properties from the AST. The LLM's role is limited to enriching descriptions, which is what it does best. On failure, the system falls back to Mode 1 defaults gracefully.
 
-```
-You are analyzing an OpenSearch Mustache search template to determine
-parameter types and descriptions.
+**Supported `llm_interface` values:**
 
-## Template Source
-{template_source}
+| Value | Provider | Tool call mechanism |
+|---|---|---|
+| `bedrock/converse/claude` | AWS Bedrock (Claude) | `toolChoice: {any: {}}` |
+| `openai/v1/chat/completions` | OpenAI-compatible | `tool_choice: "required"` |
+| `gemini/v1beta/generateContent` | Google Gemini | `functionCallingConfig: {mode: "ANY"}` |
 
-## Parameters to Annotate
-The following parameters were extracted from the template.
-For each one, determine its type and write a brief description.
+**Actual response (tested against running cluster with Bedrock Claude Sonnet):**
 
-Parameters: {extracted_variable_names}
-
-## Instructions
-
-For each parameter, determine:
-
-1. **type**: Infer from how the parameter is used in the query DSL:
-   - "string" — used in match, term, or text field contexts
-   - "integer" — used as a bare numeric value (e.g., "size": {{var}})
-   - "float" — used in range queries with decimal values or boost
-   - "boolean" — used in boolean contexts
-   - "array" — used with {{#toJson}} or {{#join}} helpers
-   - Default to "string" if ambiguous
-
-2. **description**: A concise description of what this parameter controls.
-   Base it on the field name, query clause, and role in the query.
-
-## Rules
-- Annotate EXACTLY the parameters listed — do not add or remove any
-- Do NOT determine "required" — that is handled separately
-
-Return ONLY valid JSON:
-{
-  "params": {
-    "param_name": {
-      "type": "<type>",
-      "description": "<description>"
-    }
-  }
-}
-```
-
-**Response:**
 ```json
 {
-  "tool_id": "abc123",
+  "tool_id": "wqG4Bp0BXkQCQSaYsQ_0",
   "params": {
-    "query_text":  { "type": "string",  "description": "Text to match against the title field using full-text search",   "required": true  },
-    "genre":       { "type": "string",  "description": "Genre keyword to filter results (e.g., tragedy, comedy)",        "required": false },
-    "result_size": { "type": "integer", "description": "Maximum number of search results to return",                     "required": true  }
+    "query_text": {
+      "type": "string",
+      "description": "The text to search for in document titles using match query",
+      "required": true
+    },
+    "category": {
+      "type": "string",
+      "description": "Optional category filter to restrict results to documents with a specific category value",
+      "required": false
+    },
+    "from": {
+      "type": "number",
+      "description": "The starting offset for pagination, determining which result to begin returning from (defaults to 0)",
+      "required": false,
+      "default": "0"
+    },
+    "size": {
+      "type": "number",
+      "description": "The maximum number of search results to return per page (defaults to 10)",
+      "required": false,
+      "default": "10"
+    }
   }
 }
 ```
 
 **Latency:** ~1-3s (AST extraction + one LLM call)
 
-**Error handling:** If the LLM returns malformed JSON or misses parameters, fall back to Tier 1 defaults for the affected params and log a warning.
+**Error handling:** If the LLM returns malformed JSON, misses parameters, or the call fails entirely, the system falls back to Mode 1 defaults and logs a warning. The tool is still created successfully.
 
-### 5.4 Tier 3: User-Provided Params (Manual Override)
+### 5.4 Mode 1 vs. Mode 2: Side-by-Side Comparison
+
+The following tables show real outputs from the running cluster for all four test templates.
+
+#### Product Search (`product_search_v2`)
+
+| Param | Mode 1 Description | Mode 2 Description (LLM) |
+|---|---|---|
+| `query_text` | Value for the 'title' field (match) | The text to search for in document titles using match query |
+| `category` | Value for the 'category.keyword' field (term) | Optional category filter to restrict results to documents with a specific category value |
+| `from` | Value for the 'from' field | The starting offset for pagination, determining which result to begin returning from (defaults to 0) |
+| `size` | Value for the 'size' field | The maximum number of search results to return per page (defaults to 10) |
+
+#### Log Search (`log_search_v1`)
+
+Template:
+
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "range": { "@timestamp": { "gte": "{{start_date}}", "lte": "{{end_date}}" } } }
+      ]
+      {{#level}},
+      "filter": [
+        { "term": { "level": "{{level}}" } }
+      ]
+      {{/level}}
+      {{#service}},
+      "must": [
+        { "match": { "service": "{{service}}" } }
+      ]
+      {{/service}}
+    }
+  },
+  "sort": [{ "@timestamp": { "order": "desc" } }],
+  "size": {{size}}{{^size}}50{{/size}}
+}
+```
+
+| Param | Mode 1 Description | Mode 2 Description (LLM) |
+|---|---|---|
+| `start_date` | Value for the 'gte' field (range) | The earliest timestamp to include in the search results, defining the beginning of the time range filter |
+| `end_date` | Value for the 'lte' field | The latest timestamp to include in the search results, defining the end of the time range filter |
+| `level` | Value for the 'level' field (term) | The log level to filter by (e.g., ERROR, WARN, INFO, DEBUG) to narrow results to specific severity levels |
+| `service` | Value for the 'service' field (match) | The service name to search for in log entries, used to filter results to a specific application or component |
+| `size` | Value for the 'size' field | The maximum number of search results to return, with a default limit of 50 documents |
+
+#### Geo Search (`geo_search_v1`)
+
+Template:
+
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "geo_distance": {
+            "distance": "{{radius}}{{^radius}}10km{{/radius}}",
+            "location": {
+              "lat": {{lat}},
+              "lon": {{lon}}
+            }
+          }
+        }
+      ]
+      {{#type}},
+      "filter": [
+        { "term": { "type": "{{type}}" } }
+      ]
+      {{/type}}
+    }
+  },
+  "size": {{size}}{{^size}}20{{/size}}
+}
+```
+
+| Param | Type | Required | Mode 1 Description | Mode 2 Description (LLM) |
+|---|---|---|---|---|
+| `radius` | string | false (default: 10km) | Value for the 'distance' field (must) | The search radius distance from the center point, specified with a unit (e.g., "5km", "1000m") with a default of 10km if not provided |
+| `lat` | number | true | Value for the 'lat' field | The latitude coordinate of the center point for the geographical distance search |
+| `lon` | number | true | Value for the 'lon' field | The longitude coordinate of the center point for the geographical distance search |
+| `type` | string | false | Value for the 'type' field (term) | An optional filter to restrict results to documents matching a specific type value |
+| `size` | number | false (default: 20) | Value for the 'size' field | The maximum number of search results to return, defaulting to 20 if not specified |
+
+#### Tags Search with toJson (`tags_search_v1`)
+
+Template:
+
+```mustache
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "terms": { "tags": {{#toJson}}tags{{/toJson}} } }
+      ]
+      {{#author}},
+      "filter": [
+        { "term": { "author": "{{author}}" } }
+      ]
+      {{/author}}
+    }
+  },
+  "size": {{size}}{{^size}}10{{/size}}
+}
+```
+
+| Param | Type | Required | Mode 1 Description | Mode 2 Description (LLM) |
+|---|---|---|---|---|
+| `tags` | **array** | true | Value for 'tags' (array) | An array of tag values to filter documents that must contain any of the specified tags |
+| `author` | string | false | Value for the 'author' field (term) | The specific author name to filter documents by, restricting results to only that author's content |
+| `size` | number | false (default: 10) | Value for the 'size' field | The maximum number of documents to return in the search results, defaults to 10 if not specified |
+
+Note how the `tags` parameter was correctly identified as `array` type from the `{{#toJson}}` helper — a regex-based approach would have missed this entirely.
+
+### 5.5 Mode 3: User-Provided Params (Manual Override)
 
 **Request:**
+
 ```json
 POST /_plugins/_ml/tools/_create
 {
-  "name": "ShakespeareSearchTool",
-  "description": "Search Shakespeare plays by title, optionally filter by genre",
+  "name": "ProductSearch",
+  "description": "Search products by title with optional category filter",
   "type": "search_template",
-  "search_template_name": "shakespeare_search",
+  "search_template_name": "product_search_v2",
   "params": {
-    "query_text":  { "type": "text",    "description": "Words to match in the play title", "required": true  },
-    "genre":       { "type": "keyword", "description": "Genre filter (tragedy or comedy)", "required": false },
-    "result_size": { "type": "integer", "description": "Max results to return",            "required": false }
+    "query_text":  { "type": "text",    "description": "Words to match in the product title",                       "required": true  },
+    "category":    { "type": "keyword", "description": "Product category filter (e.g., electronics, clothing)",     "required": false },
+    "from":        { "type": "integer", "description": "Pagination offset",                                         "required": false },
+    "size":        { "type": "integer", "description": "Max results per page",                                      "required": false }
   }
 }
 ```
@@ -547,20 +739,51 @@ The user provides `params` directly. **No AST extraction, no LLM call.** The use
 
 This is the existing behavior, unchanged. The user has full control — they can use custom types, override requiredness, add descriptions that reference their domain, etc.
 
+**Actual response (tested against running cluster):**
+
+```json
+{
+  "tool_id": "xqG5Bp0BXkQCQSaYJA9V",
+  "params": {
+    "query_text": {
+      "type": "text",
+      "description": "Words to match in the product title",
+      "required": true
+    },
+    "category": {
+      "type": "keyword",
+      "description": "Product category filter (e.g., electronics, clothing)",
+      "required": false
+    },
+    "from": {
+      "type": "integer",
+      "description": "Pagination offset",
+      "required": false
+    },
+    "size": {
+      "type": "integer",
+      "description": "Max results per page",
+      "required": false
+    }
+  }
+}
+```
+
 **Latency:** ~10ms (validation + index)
 
-### 5.5 Validation Rules
+### 5.6 Validation Rules
 
 | Fields provided | Behavior |
 |---|---|
-| Neither `params` nor `model_id` | **Tier 1** — auto-extract with programmatic defaults |
-| `model_id` only | **Tier 2** — auto-extract + LLM enhancement |
-| `params` only | **Tier 3** — manual, store as-is |
+| Neither `params` nor `model_id` | **Mode 1** — auto-extract with programmatic defaults |
+| `model_id` + `llm_interface` | **Mode 2** — auto-extract + LLM enrichment |
+| `model_id` without `llm_interface` | **Error:** `'llm_interface' is required when 'model_id' is provided` |
+| `params` only | **Mode 3** — manual, store as-is |
 | Both `params` and `model_id` | **Error:** `Cannot specify both 'params' and 'model_id'` |
 
-### 5.6 Updates via PUT
+### 5.7 Updates via PUT
 
-After creation (any tier), the user can update params via `PUT /_plugins/_ml/tools/{tool_id}`:
+After creation (any mode), the user can update params via `PUT /_plugins/_ml/tools/{tool_id}`:
 
 ```json
 PUT /_plugins/_ml/tools/{tool_id}
@@ -571,7 +794,7 @@ PUT /_plugins/_ml/tools/{tool_id}
 }
 ```
 
-This is the correction path for Tier 1 (fix bad defaults) and Tier 2 (fix LLM mistakes). For Tier 3, the user already provided the params they wanted.
+This is the correction path for Mode 1 (fix bad defaults) and Mode 2 (fix LLM mistakes). For Mode 3, the user already provided the params they wanted.
 
 ---
 
@@ -584,7 +807,7 @@ POST /_plugins/_ml/tools/_create
   │
   ├→ 2. Check what's provided: params? model_id? neither?
   │     ├→ Both present → Error
-  │     ├→ params present → Tier 3 (skip to step 6)
+  │     ├→ params present → Mode 3 (skip to step 6)
   │     └→ Continue to step 3
   │
   ├→ 3. Fetch stored script via GetStoredScriptRequest
@@ -598,11 +821,14 @@ POST /_plugins/_ml/tools/_create
   │     ├→ Classify: required/optional from section nesting
   │     └→ Generate: default types + descriptions from DSL context
   │
-  ├→ 5. Phase 2: LLM enhancement (only if model_id provided — Tier 2)
-  │     ├→ Build prompt with template source + extracted variables
-  │     ├→ Call model via MachineLearningNodeClient.predict()
-  │     ├→ Parse JSON response
-  │     ├→ Merge LLM types/descriptions over Phase 1 defaults
+  ├→ 5. Phase 2: LLM enhancement (only if model_id provided — Mode 2)
+  │     ├→ Validate llm_interface is provided
+  │     ├→ Build dynamic JSON Schema (one string property per param)
+  │     ├→ Configure function calling for the llm_interface
+  │     ├→ Force tool call (tool_choice: required / toolChoice: {any: {}})
+  │     ├→ Call model via MLPredictionTaskAction
+  │     ├→ Parse tool call response → extract descriptions
+  │     ├→ Merge: LLM descriptions replace AST defaults; type/required/default stay from AST
   │     └→ On LLM failure: fall back to Phase 1 defaults, log warning
   │
   └→ 6. Store custom tool with params (existing indexing flow)
@@ -633,17 +859,26 @@ POST /_plugins/_ml/tools/_create
 ### 7.4 Nested Object Sections
 
 ```mustache
-{{#user}}{{name}} {{email}}{{/user}}
+{{#user}}
+{
+  "name": "{{name}}",
+  "email": "{{email}}"
+}
+{{/user}}
 ```
 
 `name` and `email` appear at scope depth 1 inside the `user` section. They are classified as **contextual** — they may be fields on the `user` object, not root parameters. We include `user` as a root parameter (the section controller) but mark `name` and `email` as contextual with a note.
 
-For Tier 2, the LLM can use template context to determine whether these are root params or object fields.
+For Mode 2, the LLM can use template context to determine whether these are root params or object fields.
 
 ### 7.5 Boolean Flag Sections
 
 ```mustache
-{{#include_highlights}},"highlight":{"fields":{"title":{}}}{{/include_highlights}}
+{{#include_highlights}},
+"highlight": {
+  "fields": { "title": {} }
+}
+{{/include_highlights}}
 ```
 
 `include_highlights` only appears as a section controller, never as `{{include_highlights}}`. The AST walker detects this pattern and classifies it as an optional boolean parameter with type `boolean`.
@@ -662,9 +897,9 @@ For Tier 2, the LLM can use template context to determine whether these are root
 
 **Rationale:** Regex fails for toJson/join helpers, triple braces, section controllers, delimiter changes, and scope tracking. The AST handles all of these correctly because it uses the same parser that OpenSearch uses at runtime. Zero edge cases by definition — if the parser accepts it, we can walk it.
 
-### 8.2 Three Tiers Instead of Two
+### 8.2 Three Modes Instead of Two
 
-**Decision:** Support Tier 1 (no LLM) as the default, not require `model_id` or `params`.
+**Decision:** Support Mode 1 (no LLM) as the default, not require `model_id` or `params`.
 
 **Rationale:** The simplest possible creation call should work:
 
@@ -680,11 +915,11 @@ POST /_plugins/_ml/tools/_create
 
 This is the minimum viable custom tool. Programmatic extraction gives functional (if not beautiful) params with zero additional dependencies. Users who want better descriptions provide `model_id`. Users who want full control provide `params`.
 
-### 8.3 LLM Does NOT Determine Required/Optional
+### 8.3 LLM Does NOT Determine Required/Optional or Types
 
-**Decision:** Required/optional is always determined by AST analysis, never by the LLM.
+**Decision:** Required/optional and types are always determined by AST analysis, never by the LLM.
 
-**Rationale:** Requiredness is a structural property of the template, not a semantic one. The AST tells us definitively whether a variable is inside a conditional section. The LLM could hallucinate requiredness. We never give it the chance.
+**Rationale:** Requiredness is a structural property of the template, not a semantic one. The AST tells us definitively whether a variable is inside a conditional section. Similarly, types are inferred from the surrounding DSL context (quoted = string, unquoted = number, toJson = array). The LLM could hallucinate either. We never give it the chance — it only enhances descriptions.
 
 ### 8.4 `params` and `model_id` Are Mutually Exclusive
 
@@ -692,15 +927,17 @@ This is the minimum viable custom tool. Programmatic extraction gives functional
 
 **Rationale:** If the user provides manual params, auto-generation is unnecessary. If they want auto-generation, manual params would be overwritten. Mutual exclusion eliminates ambiguity.
 
-### 8.5 JSON Prompt vs. Forced Tool Call for LLM
+### 8.5 Forced Tool Call vs. JSON Prompt for LLM
 
-**Decision:** Use a JSON prompt for the Tier 2 LLM call, not forced tool calls.
+**Decision:** Use forced tool calling (not free-form JSON) for the Mode 2 LLM call.
 
-**Rationale:** The function calling infrastructure (`FunctionCalling` interface, `OpenaiV1ChatCompletionsFunctionCalling`, etc.) is tightly coupled to `MLChatAgentRunner` and the ReAct loop. The creation flow makes a standalone call via `MachineLearningNodeClient.predict()`. A well-structured JSON prompt is sufficient because:
-- The output schema is simple (flat map of param name → type + description)
-- The response is validated server-side
-- This is a creation-time operation, not latency-critical
-- The user reviews and corrects via `PUT`
+**Rationale:** Free-form JSON prompts require fragile parsing. By using the function calling infrastructure with `tool_choice: required`, the LLM is forced to return structured output matching our dynamic schema. Each extracted parameter becomes a required property in the tool's input schema, so the LLM must provide a description for every parameter — no more, no less. The response arrives as a structured tool call that can be parsed reliably.
+
+### 8.6 `llm_interface` Required for Mode 2
+
+**Decision:** Require `llm_interface` alongside `model_id`.
+
+**Rationale:** Different LLM providers use different tool call formats (OpenAI, Bedrock Converse, Gemini). The `llm_interface` value configures function calling correctly — without it, we can't force a tool call or parse the response. This mirrors how agents specify their LLM interface.
 
 ---
 
@@ -715,26 +952,20 @@ implementation "com.github.spullara.mustache.java:compiler:0.9.14"
 
 This is the same version OpenSearch core uses. No version conflict.
 
-### 9.2 Key Classes to Create
+### 9.2 Key Classes
 
 | Class | Location | Purpose |
 |---|---|---|
-| `MustacheTemplateAnalyzer` | `ml-algorithms/.../engine/tools/` | Compiles template, walks AST, returns `AnalysisResult` |
-| `AnalysisResult` | Same package | Holds extracted params with names, types, descriptions, requiredness |
-| `ParamAutoGenerator` | Same package | Orchestrates Tier 1/2 flow, calls analyzer + optionally LLM |
+| `MustacheTemplateAnalyzer` | `ml-algorithms/.../engine/tools/` | Compiles template, walks AST, returns extracted params |
+| `LLMParameterEnricher` | Same package | Mode 2: builds dynamic tool schema, calls LLM, merges descriptions |
+| `CreateCustomToolTransportAction` | `plugin/.../action/tools/` | Routes to Mode 1/2/3 based on input fields |
+| `MLCustomToolInput` | `common/.../transport/tools/` | Request DTO with `model_id` and `llm_interface` fields |
 
-### 9.3 Modified Classes
+### 9.3 Code Size
 
-| Class | Change |
-|---|---|
-| `CreateCustomToolTransportAction` | Add Tier 1/2/3 branching logic after template validation |
-| `MLCustomToolInput` | Add optional `model_id` field |
-
-### 9.4 Code Size Estimate
-
-- `MustacheTemplateAnalyzer`: ~150 lines (compile + recursive walk + classification)
-- `ParamAutoGenerator`: ~100 lines (tier routing + LLM prompt building + response parsing)
-- `CreateCustomToolTransportAction` changes: ~30 lines (branching logic)
+- `MustacheTemplateAnalyzer`: ~390 lines (compile + recursive walk + classification + heuristics)
+- `LLMParameterEnricher`: ~290 lines (schema building + prompt + function calling + merge)
+- `CreateCustomToolTransportAction` mode routing: ~60 lines
 
 ---
 
