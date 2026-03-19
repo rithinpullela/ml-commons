@@ -121,9 +121,9 @@ public class TransportMcpToolsUpdateOnNodesAction extends
                 .removeTool(tool.getName())
                 .onErrorResume(e -> Mono.empty())
                 .subscribe();
-            return mcpStatelessServerHolder
-                .getMcpStatelessAsyncServerInstance()
-                .addTool(mcpToolsHelper.createToolSpecification(tool))
+            return mcpToolsHelper
+                .createToolSpecification(tool)
+                .flatMap(spec -> mcpStatelessServerHolder.getMcpStatelessAsyncServerInstance().addTool(spec))
                 .doOnSuccess(x -> McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.put(tool.getName(), tool.getVersion()));
         }).doOnError(e -> {
             log

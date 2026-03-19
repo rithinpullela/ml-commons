@@ -36,6 +36,8 @@ import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.common.transport.mcpserver.requests.McpToolBaseInput;
 import org.opensearch.ml.common.transport.mcpserver.requests.register.McpToolRegisterInput;
 import org.opensearch.ml.common.utils.StringUtils;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
+import org.opensearch.ml.engine.tools.SearchTemplateTool;
 import org.opensearch.ml.rest.mcpserver.ToolFactoryWrapper;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.transport.client.Client;
@@ -55,31 +57,75 @@ public class McpToolsHelper {
     public static final int MAX_TOOL_NUMBER = 1000;
     private final Client client;
     private final ToolFactoryWrapper toolFactoryWrapper;
+    private final CustomToolResolver customToolResolver;
 
-    public McpToolsHelper(Client client, ToolFactoryWrapper toolFactoryWrapper) {
+    public McpToolsHelper(Client client, ToolFactoryWrapper toolFactoryWrapper, CustomToolResolver customToolResolver) {
         this.client = client;
         this.toolFactoryWrapper = toolFactoryWrapper;
+        this.customToolResolver = customToolResolver;
     }
 
     /**
      * Create stateless MCP tool specification from existing tool definition.
+     * Returns a Mono to support async custom tool resolution.
      */
-    public McpStatelessServerFeatures.AsyncToolSpecification createToolSpecification(McpToolBaseInput tool) {
+    public Mono<McpStatelessServerFeatures.AsyncToolSpecification> createToolSpecification(McpToolBaseInput tool) {
         String toolName = Optional.ofNullable(tool.getName()).orElse(tool.getType());
         Tool.Factory factory = toolFactoryWrapper.getToolsFactories().get(tool.getType());
         if (factory == null) {
-            throw new RuntimeException("Failed to find tool factory for tool type: " + tool.getType());
+            return Mono.error(new RuntimeException("Failed to find tool factory for tool type: " + tool.getType()));
         }
 
+        // Check if this is a custom tool that needs async resolution
+        if (SearchTemplateTool.TYPE.equals(tool.getType())
+            && tool.getName() != null
+            && (tool.getParameters() == null || !tool.getParameters().containsKey(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD))) {
+            return Mono.create(sink -> {
+                customToolResolver.resolve(tool.getName(), ActionListener.wrap(toolDef -> {
+                    try {
+                        Map<String, Object> factoryParams = new HashMap<>(
+                            Optional.ofNullable(tool.getParameters()).orElse(ImmutableMap.of())
+                        );
+                        factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
+                        factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+
+                        Tool actualTool = factory.create(factoryParams);
+
+                        String storedDesc = (String) toolDef.get("description");
+                        String description = Optional
+                            .ofNullable(tool.getDescription())
+                            .orElse(Optional.ofNullable(storedDesc).orElse(factory.getDefaultDescription()));
+
+                        String schema = Optional
+                            .ofNullable(getSchema(tool.getAttributes()))
+                            .orElse(Optional.ofNullable(getSchema(actualTool.getAttributes())).orElse("{}"));
+
+                        sink.success(buildAsyncToolSpec(toolName, description, schema, actualTool));
+                    } catch (Exception e) {
+                        sink.error(e);
+                    }
+                }, sink::error));
+            });
+        }
+
+        // Default sync path for regular tools
         Tool actualTool = factory.create(Optional.ofNullable(tool.getParameters()).orElse(ImmutableMap.of()));
 
-        // MCP server doesn't allow null schema
         String schema = Optional
             .ofNullable(getSchema(tool.getAttributes()))
             .orElse(Optional.ofNullable(getSchema(actualTool.getAttributes())).orElse("{}"));
 
         String description = Optional.ofNullable(tool.getDescription()).orElse(factory.getDefaultDescription());
 
+        return Mono.just(buildAsyncToolSpec(toolName, description, schema, actualTool));
+    }
+
+    private McpStatelessServerFeatures.AsyncToolSpecification buildAsyncToolSpec(
+        String toolName,
+        String description,
+        String schema,
+        Tool actualTool
+    ) {
         return new McpStatelessServerFeatures.AsyncToolSpecification(
             new McpSchema.Tool(toolName, String.valueOf(description), schema),
             (ctx, request) -> Mono.create(sink -> {

@@ -83,7 +83,7 @@ public class TransportMcpToolsRegisterOnNodesActionTests extends OpenSearchTestC
     public void setUp() throws Exception {
         super.setUp();
         MockitoAnnotations.openMocks(this);
-        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper);
+        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper, null);
         when(toolFactoryWrapper.getToolsFactories()).thenReturn(toolFactories);
         when(clusterService.getClusterName()).thenReturn(new ClusterName("clusterName"));
         when(clusterService.localNode().getId()).thenReturn("localNodeId");
@@ -168,7 +168,7 @@ public class TransportMcpToolsRegisterOnNodesActionTests extends OpenSearchTestC
             .of(
                 new McpToolRegisterInput("AgentTool", "AgentTool", "test agent tool", Map.of("agent_id", "test_agent_id"), null, null, null)
             );
-        McpStatelessServerFeatures.AsyncToolSpecification specification = mcpToolsHelper.createToolSpecification(mcpTools.get(0));
+        McpStatelessServerFeatures.AsyncToolSpecification specification = mcpToolsHelper.createToolSpecification(mcpTools.get(0)).block();
 
         // Create a new mock server for this test
         McpStatelessAsyncServer testServer = mock(McpStatelessAsyncServer.class);

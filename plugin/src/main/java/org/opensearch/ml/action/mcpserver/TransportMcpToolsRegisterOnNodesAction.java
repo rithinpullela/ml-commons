@@ -118,9 +118,9 @@ public class TransportMcpToolsRegisterOnNodesAction extends
             Long previousVersion = McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.putIfAbsent(tool.getName(), tool.getVersion());
             if (previousVersion == null) {
                 // We successfully added the key, now add the tool
-                return mcpStatelessServerHolder
-                    .getMcpStatelessAsyncServerInstance()
-                    .addTool(mcpToolsHelper.createToolSpecification(tool))
+                return mcpToolsHelper
+                    .createToolSpecification(tool)
+                    .flatMap(spec -> mcpStatelessServerHolder.getMcpStatelessAsyncServerInstance().addTool(spec))
                     .doOnError(x -> {
                         // If tool addition fails, remove from memory cache
                         McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.remove(tool.getName());

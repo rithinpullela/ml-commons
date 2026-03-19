@@ -30,6 +30,7 @@ import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.function_calling.FunctionCalling;
 import org.opensearch.ml.engine.function_calling.FunctionCallingFactory;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.TransportChannel;
 import org.opensearch.transport.client.Client;
@@ -48,6 +49,7 @@ public class MLAGUIAgentRunner implements MLAgentRunner {
     private final SdkClient sdkClient;
     private final Encryptor encryptor;
     private final HookRegistry hookRegistry;
+    private final CustomToolResolver customToolResolver;
 
     public MLAGUIAgentRunner(
         Client client,
@@ -59,7 +61,7 @@ public class MLAGUIAgentRunner implements MLAgentRunner {
         SdkClient sdkClient,
         Encryptor encryptor
     ) {
-        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, null);
+        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, null, null);
     }
 
     public MLAGUIAgentRunner(
@@ -73,6 +75,21 @@ public class MLAGUIAgentRunner implements MLAgentRunner {
         Encryptor encryptor,
         HookRegistry hookRegistry
     ) {
+        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, hookRegistry, null);
+    }
+
+    public MLAGUIAgentRunner(
+        Client client,
+        Settings settings,
+        ClusterService clusterService,
+        NamedXContentRegistry xContentRegistry,
+        Map<String, Tool.Factory> toolFactories,
+        Map<String, Memory.Factory> memoryFactoryMap,
+        SdkClient sdkClient,
+        Encryptor encryptor,
+        HookRegistry hookRegistry,
+        CustomToolResolver customToolResolver
+    ) {
         this.client = client;
         this.settings = settings;
         this.clusterService = clusterService;
@@ -82,6 +99,7 @@ public class MLAGUIAgentRunner implements MLAgentRunner {
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
         this.hookRegistry = hookRegistry;
+        this.customToolResolver = customToolResolver;
     }
 
     @Override
@@ -119,7 +137,8 @@ public class MLAGUIAgentRunner implements MLAgentRunner {
                 memoryFactoryMap,
                 sdkClient,
                 encryptor,
-                hookRegistry
+                hookRegistry,
+                customToolResolver
             );
 
             // Execute with streaming - events are generated in RestMLExecuteStreamAction

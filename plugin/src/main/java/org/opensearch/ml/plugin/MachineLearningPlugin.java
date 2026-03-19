@@ -895,6 +895,8 @@ public class MachineLearningPlugin extends Plugin
         remoteAgenticConversationMemoryFactory.init(scriptService, clusterService, client, xContentRegistry, mlFeatureEnabledSetting);
         memoryFactoryMap.put(RemoteAgenticConversationMemory.TYPE, remoteAgenticConversationMemoryFactory);
 
+        CustomToolResolver customToolResolver = new CustomToolResolver(client);
+
         MLAgentExecutor agentExecutor = new MLAgentExecutor(
             client,
             sdkClient,
@@ -904,7 +906,8 @@ public class MachineLearningPlugin extends Plugin
             toolFactories,
             memoryFactoryMap,
             mlFeatureEnabledSetting,
-            encryptor
+            encryptor,
+            customToolResolver
         );
         MLEngineClassLoader.register(FunctionName.LOCAL_SAMPLE_CALCULATOR, localSampleCalculator);
         MLEngineClassLoader.register(FunctionName.AGENT, agentExecutor);
@@ -914,8 +917,6 @@ public class MachineLearningPlugin extends Plugin
 
         MetricsCorrelation metricsCorrelation = new MetricsCorrelation(client, settings, clusterService);
         MLEngineClassLoader.register(FunctionName.METRICS_CORRELATION, metricsCorrelation);
-
-        CustomToolResolver customToolResolver = new CustomToolResolver(client);
         MLToolExecutor toolExecutor = new MLToolExecutor(
             client,
             sdkClient,
@@ -972,7 +973,7 @@ public class MachineLearningPlugin extends Plugin
             MLAdoptionMetricsCounter.initialize(clusterService.getClusterName().toString(), metricsRegistry, mlFeatureEnabledSetting);
         }
 
-        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper);
+        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper, customToolResolver);
         customToolsHelper = new CustomToolsHelper(client, clusterService, mlFeatureEnabledSetting);
         statelessServerHolder = new McpStatelessServerHolder(mcpToolsHelper, client, threadPool);
 

@@ -183,6 +183,7 @@ public class MLPlanExecuteAndReflectAgentRunnerTest extends MLStaticMockBase {
             memoryMap,
             null,
             encryptor,
+            null,
             null
         );
 

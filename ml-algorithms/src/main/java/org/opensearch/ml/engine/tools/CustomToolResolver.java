@@ -12,6 +12,7 @@ import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.ml.common.CommonValue;
+import org.opensearch.ml.common.agent.MLToolSpec;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.transport.client.Client;
 
@@ -23,6 +24,26 @@ import lombok.extern.log4j.Log4j2;
  */
 @Log4j2
 public class CustomToolResolver {
+    /**
+     * For Tool Execute API — does this request need custom tool resolution?
+     */
+    public static boolean needsResolution(String toolType, String name) {
+        return SearchTemplateTool.TYPE.equals(toolType) && name != null;
+    }
+
+    /**
+     * For Agent toolSpec — does this spec need custom tool resolution?
+     * A SearchTemplateTool needs resolution when it has a name (lookup key)
+     * but no inline search_template_name in parameters.
+     */
+    public static boolean needsResolution(MLToolSpec toolSpec) {
+        if (!SearchTemplateTool.TYPE.equals(toolSpec.getType())) {
+            return false;
+        }
+        return toolSpec.getName() != null
+            && (toolSpec.getParameters() == null || !toolSpec.getParameters().containsKey(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD));
+    }
+
     private final Client client;
 
     public CustomToolResolver(Client client) {

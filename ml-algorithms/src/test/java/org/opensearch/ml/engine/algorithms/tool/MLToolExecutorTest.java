@@ -83,7 +83,8 @@ public class MLToolExecutorTest {
         when(clusterService.getClusterSettings())
             .thenReturn(new ClusterSettings(settings, Set.of(MLCommonsSettings.ML_COMMONS_EXECUTE_TOOL_ENABLED)));
 
-        mlToolExecutor = Mockito.spy(new MLToolExecutor(client, sdkClient, settings, clusterService, xContentRegistry, toolFactories));
+        mlToolExecutor = Mockito
+            .spy(new MLToolExecutor(client, sdkClient, settings, clusterService, xContentRegistry, toolFactories, null));
     }
 
     @Test

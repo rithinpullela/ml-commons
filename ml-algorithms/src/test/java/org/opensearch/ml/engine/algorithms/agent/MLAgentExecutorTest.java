@@ -159,7 +159,8 @@ public class MLAgentExecutorTest {
             toolFactories,
             memoryFactoryMap,
             mlFeatureEnabledSetting,
-            encryptor
+            encryptor,
+            null
         );
     }
 

@@ -49,7 +49,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 import org.apache.commons.text.StringSubstitutor;
 import org.opensearch.action.StepListener;
@@ -86,6 +85,7 @@ import org.opensearch.ml.engine.agents.AgentContextUtil;
 import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.function_calling.FunctionCalling;
 import org.opensearch.ml.engine.function_calling.FunctionCallingFactory;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.TransportChannel;
 import org.opensearch.transport.client.Client;
@@ -108,6 +108,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
     private SdkClient sdkClient;
     private Encryptor encryptor;
     private HookRegistry hookRegistry;
+    private CustomToolResolver customToolResolver;
     // flag to track if task has been updated with executor memory ids or not
     private boolean taskUpdated = false;
     private final Map<String, Object> taskUpdates = new HashMap<>();
@@ -180,7 +181,8 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         Map<String, Memory.Factory> memoryFactoryMap,
         SdkClient sdkClient,
         Encryptor encryptor,
-        HookRegistry hookRegistry
+        HookRegistry hookRegistry,
+        CustomToolResolver customToolResolver
     ) {
         this.client = client;
         this.settings = settings;
@@ -191,6 +193,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
         this.hookRegistry = hookRegistry;
+        this.customToolResolver = customToolResolver;
         this.plannerPrompt = DEFAULT_PLANNER_PROMPT;
         this.plannerPromptTemplate = DEFAULT_PLANNER_PROMPT_TEMPLATE;
         this.reflectPrompt = DEFAULT_REFLECT_PROMPT;
@@ -411,36 +414,35 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
     ) {
         List<MLToolSpec> toolSpecs = getMlToolSpecs(mlAgent, allParams);
 
-        // Create a common method to handle both success and failure cases
-        Consumer<List<MLToolSpec>> processTools = (allToolSpecs) -> {
-            Map<String, Tool> tools = new HashMap<>();
-            Map<String, MLToolSpec> toolSpecMap = new HashMap<>();
-            createTools(toolFactories, allParams, allToolSpecs, tools, toolSpecMap, mlAgent);
-            addToolsToPrompt(tools, allParams);
+        // Common handler to create tools and start planning loop
+        ActionListener<List<MLToolSpec>> processToolsListener = ActionListener.wrap(allToolSpecs -> {
+            createTools(toolFactories, allParams, allToolSpecs, mlAgent, customToolResolver, ActionListener.wrap(result -> {
+                addToolsToPrompt(result.getTools(), allParams);
 
-            AtomicInteger traceNumber = new AtomicInteger(0);
+                AtomicInteger traceNumber = new AtomicInteger(0);
 
-            executePlanningLoop(
-                mlAgent.getLlm(),
-                allParams,
-                completedSteps,
-                memory,
-                conversationId,
-                0,
-                traceNumber,
-                finalListener,
-                functionCalling,
-                tokenTracker
-            );
-        };
+                executePlanningLoop(
+                    mlAgent.getLlm(),
+                    allParams,
+                    completedSteps,
+                    memory,
+                    conversationId,
+                    0,
+                    traceNumber,
+                    finalListener,
+                    functionCalling,
+                    tokenTracker
+                );
+            }, finalListener::onFailure));
+        }, finalListener::onFailure);
 
         // Fetch MCP tools and handle both success and failure cases
         getMcpToolSpecs(mlAgent, client, sdkClient, encryptor, ActionListener.wrap(mcpTools -> {
             toolSpecs.addAll(mcpTools);
-            processTools.accept(toolSpecs);
+            processToolsListener.onResponse(toolSpecs);
         }, e -> {
             log.warn("Failed to get MCP tools, continuing with base tools only", e);
-            processTools.accept(toolSpecs);
+            processToolsListener.onResponse(toolSpecs);
         }));
     }
 

@@ -91,7 +91,7 @@ public class TransportMcpToolsUpdateOnNodesActionTests extends OpenSearchTestCas
         MockitoAnnotations.openMocks(this);
 
         McpStatelessServerHolder.IN_MEMORY_MCP_TOOLS.clear();
-        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper);
+        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper, null);
         when(clusterService.getClusterName()).thenReturn(new ClusterName("test-cluster"));
         when(clusterService.localNode().getId()).thenReturn("local-node");
         when(toolFactoryWrapper.getToolsFactories()).thenReturn(toolFactories);

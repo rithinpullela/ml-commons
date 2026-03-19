@@ -58,7 +58,7 @@ public class ListToolsTransportActionTests extends OpenSearchTestCase {
 
         exceptionToThrow = new RuntimeException("Failed to get tools list");
 
-        listToolsTransportAction = spy(new ListToolsTransportAction(transportService, actionFilters));
+        listToolsTransportAction = spy(new ListToolsTransportAction(transportService, actionFilters, null));
     }
 
     public void testListTools_Success() {

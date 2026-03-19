@@ -105,8 +105,10 @@ import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.function_calling.FunctionCalling;
 import org.opensearch.ml.engine.memory.ConversationIndexMemory;
 import org.opensearch.ml.engine.memory.ConversationIndexMessage;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.ml.engine.tools.McpSseTool;
 import org.opensearch.ml.engine.tools.McpStreamableHttpTool;
+import org.opensearch.ml.engine.tools.SearchTemplateTool;
 import org.opensearch.remote.metadata.client.GetDataObjectRequest;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.remote.metadata.common.SdkClientUtils;
@@ -119,6 +121,8 @@ import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
 
+import lombok.AllArgsConstructor;
+import lombok.Data;
 import lombok.extern.log4j.Log4j2;
 
 @Log4j2
@@ -172,6 +176,13 @@ public class AgentUtils {
 
     // For function calling, do not escape the below params in connector by default
     public static final String DEFAULT_NO_ESCAPE_PARAMS = "_chat_history,_tools,_interactions,tool_configs";
+
+    @Data
+    @AllArgsConstructor
+    public static class ToolCreationResult {
+        private final Map<String, Tool> tools;
+        private final Map<String, MLToolSpec> toolSpecMap;
+    }
 
     public static final String DEFAULT_DATETIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss'Z'";
     public static final String DEFAULT_DATETIME_PREFIX = "Current date and time: ";
@@ -964,32 +975,102 @@ public class AgentUtils {
         Map<String, Tool.Factory> toolFactories,
         Map<String, String> params,
         List<MLToolSpec> toolSpecs,
-        Map<String, Tool> tools,
-        Map<String, MLToolSpec> toolSpecMap,
-        MLAgent mlAgent
+        MLAgent mlAgent,
+        CustomToolResolver customToolResolver,
+        ActionListener<ToolCreationResult> listener
     ) {
-        if (toolSpecs == null) {
+        Map<String, Tool> tools = new HashMap<>();
+        Map<String, MLToolSpec> toolSpecMap = new HashMap<>();
+
+        if (toolSpecs == null || toolSpecs.isEmpty()) {
+            listener.onResponse(new ToolCreationResult(tools, toolSpecMap));
             return;
         }
         // Add agent's model_id for tools that may need it like QPT
         if (mlAgent.getLlm() != null && mlAgent.getLlm().getModelId() != null) {
             params.put(AGENT_LLM_MODEL_ID, mlAgent.getLlm().getModelId());
         }
-        for (MLToolSpec toolSpec : toolSpecs) {
-            Map<String, String> toolParams = buildToolParameters(params, toolSpec, mlAgent.getTenantId());
-            Tool tool = createTool(toolFactories, toolParams, toolSpec);
-            tools.put(tool.getName(), tool);
-            if (toolSpec.getAttributes() != null) {
-                if (tool.getAttributes() == null) {
-                    Map<String, Object> attributes = new HashMap<>();
-                    attributes.putAll(toolSpec.getAttributes());
-                    tool.setAttributes(attributes);
-                } else {
-                    tool.getAttributes().putAll(toolSpec.getAttributes());
-                }
-            }
-            toolSpecMap.put(tool.getName(), toolSpec);
+        createToolAtIndex(toolFactories, params, toolSpecs, 0, tools, toolSpecMap, mlAgent, customToolResolver, listener);
+    }
+
+    private static void createToolAtIndex(
+        Map<String, Tool.Factory> toolFactories,
+        Map<String, String> params,
+        List<MLToolSpec> toolSpecs,
+        int index,
+        Map<String, Tool> tools,
+        Map<String, MLToolSpec> toolSpecMap,
+        MLAgent mlAgent,
+        CustomToolResolver customToolResolver,
+        ActionListener<ToolCreationResult> listener
+    ) {
+        if (index >= toolSpecs.size()) {
+            listener.onResponse(new ToolCreationResult(tools, toolSpecMap));
+            return;
         }
+
+        MLToolSpec toolSpec = toolSpecs.get(index);
+        Map<String, String> toolParams = buildToolParameters(params, toolSpec, mlAgent.getTenantId());
+
+        ActionListener<Tool> toolCreated = ActionListener.wrap(tool -> {
+            addToolToMaps(tool, toolSpec, tools, toolSpecMap);
+            createToolAtIndex(toolFactories, params, toolSpecs, index + 1, tools, toolSpecMap, mlAgent, customToolResolver, listener);
+        }, listener::onFailure);
+
+        if (CustomToolResolver.needsResolution(toolSpec)) {
+            customToolResolver.resolve(toolSpec.getName(), ActionListener.wrap(toolDef -> {
+                try {
+                    // Build factory params with correct types for SearchTemplateTool
+                    Map<String, Object> factoryParams = new HashMap<>(toolParams);
+                    factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
+                    factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+
+                    if (!toolFactories.containsKey(toolSpec.getType())) {
+                        throw new IllegalArgumentException("Tool type not found");
+                    }
+
+                    Map<String, Object> runtimeResources = toolSpec.getRuntimeResources();
+                    if (runtimeResources != null) {
+                        factoryParams.putAll(runtimeResources);
+                    }
+
+                    Tool tool = toolFactories.get(toolSpec.getType()).create(factoryParams);
+                    String toolName = getToolName(toolSpec);
+                    tool.setName(toolName);
+
+                    // Use stored description from custom tool, fall back to toolSpec description
+                    String storedDesc = (String) toolDef.get("description");
+                    if (storedDesc != null) {
+                        tool.setDescription(storedDesc);
+                    } else if (toolSpec.getDescription() != null) {
+                        tool.setDescription(toolSpec.getDescription());
+                    }
+
+                    toolCreated.onResponse(tool);
+                } catch (Exception e) {
+                    listener.onFailure(e);
+                }
+            }, listener::onFailure));
+        } else {
+            try {
+                Tool tool = createTool(toolFactories, toolParams, toolSpec);
+                toolCreated.onResponse(tool);
+            } catch (Exception e) {
+                listener.onFailure(e);
+            }
+        }
+    }
+
+    private static void addToolToMaps(Tool tool, MLToolSpec toolSpec, Map<String, Tool> tools, Map<String, MLToolSpec> toolSpecMap) {
+        tools.put(tool.getName(), tool);
+        if (toolSpec.getAttributes() != null) {
+            if (tool.getAttributes() == null) {
+                tool.setAttributes(new HashMap<>(toolSpec.getAttributes()));
+            } else {
+                tool.getAttributes().putAll(toolSpec.getAttributes());
+            }
+        }
+        toolSpecMap.put(tool.getName(), toolSpec);
     }
 
     public static Map<String, String> constructToolParams(

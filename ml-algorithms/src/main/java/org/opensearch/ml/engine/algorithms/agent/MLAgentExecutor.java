@@ -96,6 +96,7 @@ import org.opensearch.ml.engine.annotation.Function;
 import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
 import org.opensearch.ml.engine.memory.ConversationIndexMessage;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.ml.memory.action.conversation.CreateInteractionResponse;
 import org.opensearch.ml.memory.action.conversation.GetInteractionAction;
 import org.opensearch.ml.memory.action.conversation.GetInteractionRequest;
@@ -142,6 +143,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
     private volatile Boolean isMultiTenancyEnabled;
     private Encryptor encryptor;
     private MLFeatureEnabledSetting mlFeatureEnabledSetting;
+    private CustomToolResolver customToolResolver;
 
     public MLAgentExecutor(
         Client client,
@@ -152,7 +154,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         Map<String, Tool.Factory> toolFactories,
         Map<String, Memory.Factory> memoryFactoryMap,
         MLFeatureEnabledSetting mlFeatureEnabledSetting,
-        Encryptor encryptor
+        Encryptor encryptor,
+        CustomToolResolver customToolResolver
     ) {
         this.client = client;
         this.sdkClient = sdkClient;
@@ -163,6 +166,7 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         this.memoryFactoryMap = memoryFactoryMap;
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
         this.encryptor = encryptor;
+        this.customToolResolver = customToolResolver;
         this.isMultiTenancyEnabled = mlFeatureEnabledSetting.isMultiTenancyEnabled();
     }
 
@@ -1185,7 +1189,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     memoryFactoryMap,
                     sdkClient,
                     encryptor,
-                    hookRegistry
+                    hookRegistry,
+                    customToolResolver
                 );
             case PLAN_EXECUTE_AND_REFLECT:
                 return new MLPlanExecuteAndReflectAgentRunner(
@@ -1197,7 +1202,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     memoryFactoryMap,
                     sdkClient,
                     encryptor,
-                    hookRegistry
+                    hookRegistry,
+                    customToolResolver
                 );
             case AG_UI:
                 return new MLAGUIAgentRunner(
@@ -1209,7 +1215,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     memoryFactoryMap,
                     sdkClient,
                     encryptor,
-                    hookRegistry
+                    hookRegistry,
+                    customToolResolver
                 );
             default:
                 throw new IllegalArgumentException("Unsupported agent type");

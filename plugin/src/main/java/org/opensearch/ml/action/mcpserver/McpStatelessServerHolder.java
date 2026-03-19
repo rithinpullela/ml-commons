@@ -117,18 +117,26 @@ public class McpStatelessServerHolder {
                     Long previousVersion = IN_MEMORY_MCP_TOOLS.putIfAbsent(key, value.v2());
                     if (previousVersion == null) {
                         // We successfully added the key, now add the tool
-                        getMcpStatelessAsyncServerInstance().addTool(mcpToolsHelper.createToolSpecification(value.v1())).doOnError(x -> {
-                            // If tool addition fails, remove from memory cache
-                            IN_MEMORY_MCP_TOOLS.remove(key);
-                            log.error("Failed to auto load tool: {}", value.v1().getName(), x);
-                        }).subscribe();
+                        mcpToolsHelper
+                            .createToolSpecification(value.v1())
+                            .flatMap(spec -> getMcpStatelessAsyncServerInstance().addTool(spec))
+                            .doOnError(x -> {
+                                // If tool addition fails, remove from memory cache
+                                IN_MEMORY_MCP_TOOLS.remove(key);
+                                log.error("Failed to auto load tool: {}", value.v1().getName(), x);
+                            })
+                            .subscribe();
                     } else if (previousVersion < value.v2()) {
                         // Chain the operations to avoid race conditions
                         getMcpStatelessAsyncServerInstance().removeTool(key).onErrorResume(e -> {
                             log.warn("Failed to remove old tool version: {}", key, e);
                             return Mono.empty();
                         })
-                            .then(getMcpStatelessAsyncServerInstance().addTool(mcpToolsHelper.createToolSpecification(value.v1())))
+                            .then(
+                                mcpToolsHelper
+                                    .createToolSpecification(value.v1())
+                                    .flatMap(spec -> getMcpStatelessAsyncServerInstance().addTool(spec))
+                            )
                             .doOnSuccess(x -> {
                                 IN_MEMORY_MCP_TOOLS.put(key, value.v2());
                                 log.info("Successfully updated tool: {} to version: {}", key, value.v2());

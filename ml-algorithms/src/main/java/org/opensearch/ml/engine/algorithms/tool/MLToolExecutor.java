@@ -87,8 +87,8 @@ public class MLToolExecutor implements Executable {
             return;
         }
 
-        // Dedicated async handler for SearchTemplateTool with pre-registered name
-        if (SearchTemplateTool.TYPE.equals(toolName) && toolMLInput.getName() != null) {
+        // Custom tool with pre-registered name — dedicated async handler
+        if (CustomToolResolver.needsResolution(toolName, toolMLInput.getName())) {
             executeWithRegisteredTool(toolMLInput.getName(), toolFactory, parameters, listener);
             return;
         }

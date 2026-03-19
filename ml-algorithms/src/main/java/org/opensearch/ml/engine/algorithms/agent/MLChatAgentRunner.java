@@ -103,6 +103,7 @@ import org.opensearch.ml.engine.function_calling.FunctionCalling;
 import org.opensearch.ml.engine.function_calling.FunctionCallingFactory;
 import org.opensearch.ml.engine.function_calling.LLMMessage;
 import org.opensearch.ml.engine.memory.ConversationIndexMessage;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.ml.engine.tools.MLModelTool;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.TransportChannel;
@@ -166,6 +167,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
     private Encryptor encryptor;
     private StreamingWrapper streamingWrapper;
     private HookRegistry hookRegistry;
+    private CustomToolResolver customToolResolver;
 
     public MLChatAgentRunner(
         Client client,
@@ -177,7 +179,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
         SdkClient sdkClient,
         Encryptor encryptor
     ) {
-        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, null);
+        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, null, null);
     }
 
     public MLChatAgentRunner(
@@ -191,6 +193,21 @@ public class MLChatAgentRunner implements MLAgentRunner {
         Encryptor encryptor,
         HookRegistry hookRegistry
     ) {
+        this(client, settings, clusterService, xContentRegistry, toolFactories, memoryFactoryMap, sdkClient, encryptor, hookRegistry, null);
+    }
+
+    public MLChatAgentRunner(
+        Client client,
+        Settings settings,
+        ClusterService clusterService,
+        NamedXContentRegistry xContentRegistry,
+        Map<String, Tool.Factory> toolFactories,
+        Map<String, Memory.Factory> memoryFactoryMap,
+        SdkClient sdkClient,
+        Encryptor encryptor,
+        HookRegistry hookRegistry,
+        CustomToolResolver customToolResolver
+    ) {
         this.client = client;
         this.settings = settings;
         this.clusterService = clusterService;
@@ -200,6 +217,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
         this.hookRegistry = hookRegistry;
+        this.customToolResolver = customToolResolver;
     }
 
     @Override
@@ -1654,21 +1672,33 @@ public class MLChatAgentRunner implements MLAgentRunner {
             // Add MCP tools to backend tools
             backendToolSpecs.addAll(mcpTools);
 
-            // Create backend tools map
-            Map<String, Tool> backendToolsMap = new HashMap<>();
-            Map<String, MLToolSpec> toolSpecMap = new HashMap<>();
-            createTools(toolFactories, params, backendToolSpecs, backendToolsMap, toolSpecMap, mlAgent);
-
-            // Create unified tool list for function calling (frontend + backend)
-            processUnifiedToolsWithBackend(mlAgent, params, listener, memory, functionCalling, frontendTools, backendToolsMap, toolSpecMap);
+            // Create backend tools map (async for custom tool resolution)
+            createTools(toolFactories, params, backendToolSpecs, mlAgent, customToolResolver, ActionListener.wrap(result -> {
+                processUnifiedToolsWithBackend(
+                    mlAgent,
+                    params,
+                    listener,
+                    memory,
+                    functionCalling,
+                    frontendTools,
+                    result.getTools(),
+                    result.getToolSpecMap()
+                );
+            }, listener::onFailure));
         }, e -> {
             // Even if MCP tools fail, continue with base backend tools
-
-            Map<String, Tool> backendToolsMap = new HashMap<>();
-            Map<String, MLToolSpec> toolSpecMap = new HashMap<>();
-            createTools(toolFactories, params, backendToolSpecs, backendToolsMap, toolSpecMap, mlAgent);
-
-            processUnifiedToolsWithBackend(mlAgent, params, listener, memory, functionCalling, frontendTools, backendToolsMap, toolSpecMap);
+            createTools(toolFactories, params, backendToolSpecs, mlAgent, customToolResolver, ActionListener.wrap(result -> {
+                processUnifiedToolsWithBackend(
+                    mlAgent,
+                    params,
+                    listener,
+                    memory,
+                    functionCalling,
+                    frontendTools,
+                    result.getTools(),
+                    result.getToolSpecMap()
+                );
+            }, listener::onFailure));
         }));
     }
 

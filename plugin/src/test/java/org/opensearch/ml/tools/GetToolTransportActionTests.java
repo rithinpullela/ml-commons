@@ -54,7 +54,7 @@ public class GetToolTransportActionTests extends OpenSearchTestCase {
         mlToolGetRequest = MLToolGetRequest.builder().toolMetadataList(toolMetadataList).toolName("WikipediaTool").build();
         exceptionToThrow = new RuntimeException("Failed to get tool");
 
-        getToolTransportAction = spy(new GetToolTransportAction(transportService, actionFilters));
+        getToolTransportAction = spy(new GetToolTransportAction(transportService, actionFilters, null));
     }
 
     public void testGetTool_Success() {

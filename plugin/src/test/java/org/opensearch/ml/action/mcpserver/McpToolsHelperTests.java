@@ -83,7 +83,7 @@ public class McpToolsHelperTests extends OpenSearchTestCase {
             .thenReturn(new ClusterSettings(settings, Set.of(MLCommonsSettings.ML_COMMONS_MCP_SERVER_ENABLED)));
         TestHelper.mockClientStashContext(client, settings);
         when(toolFactoryWrapper.getToolsFactories()).thenReturn(toolFactories);
-        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper);
+        mcpToolsHelper = new McpToolsHelper(client, toolFactoryWrapper, null);
 
         // Default mock behavior for search operations
         doAnswer(invocationOnMock -> {
