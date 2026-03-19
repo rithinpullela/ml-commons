@@ -10,11 +10,13 @@ import static org.opensearch.core.xcontent.XContentParserUtils.ensureExpectedTok
 import java.io.IOException;
 import java.util.Map;
 
+import org.opensearch.Version;
 import org.opensearch.core.ParseField;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.ml.common.CommonValue;
 import org.opensearch.ml.common.FunctionName;
 import org.opensearch.ml.common.dataset.remote.RemoteInferenceInputDataSet;
 import org.opensearch.ml.common.input.Input;
@@ -27,21 +29,34 @@ import lombok.Setter;
 @org.opensearch.ml.common.annotation.MLInput(functionNames = { FunctionName.TOOL })
 public class ToolMLInput extends MLInput {
     public static final String TOOL_NAME_FIELD = "tool_name";
+    public static final String NAME_FIELD = "name";
     public static final String PARAMETERS_FIELD = "parameters";
+
+    private static final Version MINIMAL_SUPPORTED_VERSION_FOR_CUSTOM_TOOLS = CommonValue.VERSION_3_6_0;
 
     @Getter
     @Setter
     private String toolName;
 
+    @Getter
+    @Setter
+    private String name;
+
     public ToolMLInput(StreamInput in) throws IOException {
         super(in);
+        Version streamInputVersion = in.getVersion();
         this.toolName = in.readString();
+        this.name = streamInputVersion.onOrAfter(MINIMAL_SUPPORTED_VERSION_FOR_CUSTOM_TOOLS) ? in.readOptionalString() : null;
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
+        Version streamOutputVersion = out.getVersion();
         out.writeString(toolName);
+        if (streamOutputVersion.onOrAfter(MINIMAL_SUPPORTED_VERSION_FOR_CUSTOM_TOOLS)) {
+            out.writeOptionalString(name);
+        }
     }
 
     public static final NamedXContentRegistry.Entry XCONTENT_REGISTRY = new NamedXContentRegistry.Entry(
@@ -64,6 +79,9 @@ public class ToolMLInput extends MLInput {
             switch (fieldName) {
                 case TOOL_NAME_FIELD:
                     toolName = parser.text();
+                    break;
+                case NAME_FIELD:
+                    name = parser.text();
                     break;
                 case PARAMETERS_FIELD:
                     Map<String, String> parameters = StringUtils.getParameterMap(parser.map());

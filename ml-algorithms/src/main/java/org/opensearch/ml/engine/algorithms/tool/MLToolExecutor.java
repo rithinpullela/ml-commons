@@ -26,6 +26,8 @@ import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.common.utils.StringUtils;
 import org.opensearch.ml.engine.Executable;
 import org.opensearch.ml.engine.annotation.Function;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
+import org.opensearch.ml.engine.tools.SearchTemplateTool;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.client.Client;
 
@@ -45,6 +47,7 @@ public class MLToolExecutor implements Executable {
     private ClusterService clusterService;
     private NamedXContentRegistry xContentRegistry;
     private Map<String, Tool.Factory> toolFactories;
+    private CustomToolResolver customToolResolver;
 
     public MLToolExecutor(
         Client client,
@@ -52,7 +55,8 @@ public class MLToolExecutor implements Executable {
         Settings settings,
         ClusterService clusterService,
         NamedXContentRegistry xContentRegistry,
-        Map<String, Tool.Factory> toolFactories
+        Map<String, Tool.Factory> toolFactories,
+        CustomToolResolver customToolResolver
     ) {
         this.client = client;
         this.sdkClient = sdkClient;
@@ -60,6 +64,7 @@ public class MLToolExecutor implements Executable {
         this.clusterService = clusterService;
         this.xContentRegistry = xContentRegistry;
         this.toolFactories = toolFactories;
+        this.customToolResolver = customToolResolver;
     }
 
     @Override
@@ -82,27 +87,82 @@ public class MLToolExecutor implements Executable {
             return;
         }
 
+        // Dedicated async handler for SearchTemplateTool with pre-registered name
+        if (SearchTemplateTool.TYPE.equals(toolName) && toolMLInput.getName() != null) {
+            executeWithRegisteredTool(toolMLInput.getName(), toolFactory, parameters, listener);
+            return;
+        }
+
+        // Default path for all other tools
+        executeDirectly(toolFactory, toolName, parameters, listener);
+    }
+
+    private void executeDirectly(
+        Tool.Factory<?> toolFactory,
+        String toolName,
+        Map<String, String> parameters,
+        ActionListener<Output> listener
+    ) {
         try {
             Map<String, String> mutableParams = new HashMap<>(parameters);
-            Tool tool = toolFactory.create(mutableParams);
+            Map<String, Object> factoryParams = new HashMap<>(mutableParams);
+            Tool tool = toolFactory.create(factoryParams);
             if (!tool.validate(mutableParams)) {
                 listener.onFailure(new IllegalArgumentException("Invalid parameters for tool: " + toolName));
                 return;
             }
-
             tool.run(mutableParams, ActionListener.wrap(result -> {
                 List<ModelTensor> modelTensors = new ArrayList<>();
                 processOutput(result, modelTensors);
                 ModelTensors tensors = ModelTensors.builder().mlModelTensors(modelTensors).build();
                 listener.onResponse(new ModelTensorOutput(List.of(tensors)));
-            }, error -> {
-                log.error("Failed to execute tool: " + toolName, error);
-                listener.onFailure(error);
-            }));
+            }, error -> listener.onFailure(error)));
         } catch (Exception e) {
             log.error("Failed to execute tool: " + toolName, e);
             listener.onFailure(e);
         }
+    }
+
+    private void executeWithRegisteredTool(
+        String registeredName,
+        Tool.Factory<?> toolFactory,
+        Map<String, String> runtimeParameters,
+        ActionListener<Output> listener
+    ) {
+        customToolResolver.resolve(registeredName, ActionListener.wrap(toolDef -> {
+            try {
+                // Merge stored config into factory params
+                Map<String, Object> factoryParams = new HashMap<>(runtimeParameters);
+                factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
+                factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+
+                // Create tool — factory sees search_template_name, uses existing code path
+                Tool tool = toolFactory.create(factoryParams);
+
+                // Set stored description
+                String storedDescription = (String) toolDef.get("description");
+                if (storedDescription != null) {
+                    tool.setDescription(storedDescription);
+                }
+
+                Map<String, String> mutableParams = new HashMap<>(runtimeParameters);
+                tool.run(mutableParams, ActionListener.wrap(result -> {
+                    List<ModelTensor> modelTensors = new ArrayList<>();
+                    processOutput(result, modelTensors);
+                    ModelTensors tensors = ModelTensors.builder().mlModelTensors(modelTensors).build();
+                    listener.onResponse(new ModelTensorOutput(List.of(tensors)));
+                }, error -> {
+                    log.error("Failed to execute pre-registered tool: " + registeredName, error);
+                    listener.onFailure(error);
+                }));
+            } catch (Exception e) {
+                log.error("Failed to create pre-registered tool: " + registeredName, e);
+                listener.onFailure(e);
+            }
+        }, e -> {
+            log.error("Failed to resolve pre-registered tool: " + registeredName, e);
+            listener.onFailure(e);
+        }));
     }
 
     private void processOutput(Object output, List<ModelTensor> modelTensors) {

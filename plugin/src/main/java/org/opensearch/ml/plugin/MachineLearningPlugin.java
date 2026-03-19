@@ -280,6 +280,7 @@ import org.opensearch.ml.engine.memory.MLMemoryManager;
 import org.opensearch.ml.engine.memory.RemoteAgenticConversationMemory;
 import org.opensearch.ml.engine.tools.AgentTool;
 import org.opensearch.ml.engine.tools.ConnectorTool;
+import org.opensearch.ml.engine.tools.CustomToolResolver;
 import org.opensearch.ml.engine.tools.IndexInsightTool;
 import org.opensearch.ml.engine.tools.IndexMappingTool;
 import org.opensearch.ml.engine.tools.ListIndexTool;
@@ -914,7 +915,16 @@ public class MachineLearningPlugin extends Plugin
         MetricsCorrelation metricsCorrelation = new MetricsCorrelation(client, settings, clusterService);
         MLEngineClassLoader.register(FunctionName.METRICS_CORRELATION, metricsCorrelation);
 
-        MLToolExecutor toolExecutor = new MLToolExecutor(client, sdkClient, settings, clusterService, xContentRegistry, toolFactories);
+        CustomToolResolver customToolResolver = new CustomToolResolver(client);
+        MLToolExecutor toolExecutor = new MLToolExecutor(
+            client,
+            sdkClient,
+            settings,
+            clusterService,
+            xContentRegistry,
+            toolFactories,
+            customToolResolver
+        );
         MLEngineClassLoader.register(FunctionName.TOOL, toolExecutor);
 
         MLSearchHandler mlSearchHandler = new MLSearchHandler(

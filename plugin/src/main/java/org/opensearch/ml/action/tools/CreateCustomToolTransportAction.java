@@ -24,6 +24,7 @@ import org.opensearch.ml.common.transport.tools.MLCreateCustomToolRequest;
 import org.opensearch.ml.common.transport.tools.MLCreateCustomToolResponse;
 import org.opensearch.ml.common.transport.tools.MLCustomToolInput;
 import org.opensearch.ml.engine.indices.MLIndicesHandler;
+import org.opensearch.ml.engine.tools.LLMParameterEnricher;
 import org.opensearch.ml.engine.tools.MustacheTemplateAnalyzer;
 import org.opensearch.ml.utils.TenantAwareHelper;
 import org.opensearch.remote.metadata.client.PutDataObjectRequest;
@@ -127,20 +128,38 @@ public class CreateCustomToolTransportAction extends HandledTransportAction<Acti
 
             if (input.getModelId() != null) {
                 // Tier 2: model_id provided — auto-extract + LLM enrichment
-                // TODO: Implement LLM-assisted parameter enrichment.
-                // The extractedParams from MustacheTemplateAnalyzer provide parameter names,
-                // required/optional status, and heuristic types. An LLM call using the provided
-                // model_id should enhance descriptions and refine types.
-                // For now, fall through to use the AST-extracted params as-is.
-                log
-                    .info(
-                        "model_id provided for custom tool '{}' but LLM enrichment not yet implemented. Using AST-extracted params.",
-                        input.getName()
+                String llmInterface = input.getLlmInterface();
+                if (llmInterface == null || llmInterface.trim().isEmpty()) {
+                    listener
+                        .onFailure(
+                            new IllegalArgumentException("'llm_interface' is required when 'model_id' is provided for LLM enrichment")
+                        );
+                    return;
+                }
+
+                log.info("Enriching params via LLM for custom tool '{}' using model '{}'", input.getName(), input.getModelId());
+                LLMParameterEnricher
+                    .enrich(
+                        client,
+                        input.getModelId(),
+                        llmInterface,
+                        templateSource,
+                        extractedParams,
+                        ActionListener.wrap(enrichedParams -> {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> paramsForStorage = (Map<String, Object>) (Map<String, ?>) enrichedParams;
+                            input.setParams(paramsForStorage);
+                            indexCustomTool(input, listener);
+                        }, e -> {
+                            log.error("LLM enrichment failed for custom tool '{}'", input.getName(), e);
+                            listener.onFailure(e);
+                        })
                     );
-            } else {
-                // Tier 1: Neither params nor model_id — pure AST extraction with heuristic defaults
-                log.debug("Auto-extracting params from template for custom tool '{}'", input.getName());
+                return;
             }
+
+            // Tier 1: Neither params nor model_id — pure AST extraction with heuristic defaults
+            log.debug("Auto-extracting params from template for custom tool '{}'", input.getName());
 
             @SuppressWarnings("unchecked")
             Map<String, Object> paramsForStorage = (Map<String, Object>) (Map<String, ?>) extractedParams;

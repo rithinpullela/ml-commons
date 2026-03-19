@@ -1,507 +1,414 @@
-# Custom Tools for ML Commons — Design Document
+# Custom Tools for ML Agents — Design Document
 
-## 1. Overview
+## 1. Problem Statement
 
-This feature introduces user-defined custom tools backed by OpenSearch search templates that can be managed via CRUD APIs and attached to ML agents. Previously, only built-in tools (hardcoded via `Tool.Factory` in the plugin) were available to agents. Custom tools allow users to wrap search templates — parameterized, reusable query definitions — as first-class tools that agents can invoke at runtime.
+OpenSearch ML agents today have no way to leverage existing search templates. When an agent needs to execute a search, the LLM must generate full OpenSearch DSL from scratch — even when the customer already has a well-tested, parameterized search template that does exactly what's needed. This creates several problems:
 
-### User Flow
+- **Wasted tokens and latency:** The LLM receives the full index mapping, sample documents, and template references in its prompt (~4,000-5,000 tokens), then generates a complete DSL query as output (~300 tokens, 2-5 seconds). Most of this work is redundant when a template already defines the query structure.
+- **Unreliable output:** The LLM can produce syntactically invalid queries, deviate from the expected query shape, or hallucinate field names that don't exist in the index. There is no guarantee the generated DSL matches the intended search pattern.
+- **Expensive models required:** DSL generation is a complex task that demands large, capable models. Smaller, cheaper models cannot reliably produce correct OpenSearch queries.
+- **No reuse of existing work:** Customers have invested in building and validating search templates for their use cases — product searches, log filters, geo queries, aggregation pipelines. There is no mechanism to expose these templates as tools that agents can call.
 
-```
-1. User creates a search template:     POST _scripts/<template_name>
-2. User registers a custom tool:       POST /_plugins/_ml/tools/_create
-3. User attaches the tool to an agent:  POST /_plugins/_ml/agents/_register
-4. Agent executes the tool at runtime:  POST /_plugins/_ml/agents/<id>/_execute
+Customers are asking for the ability to take their existing search templates and make them directly usable by agents, without the overhead and risk of full DSL generation.
+
+## 2. Motivation
+
+**The core insight** is that if the search pattern already exists as a template, the LLM's job should reduce to **filling in parameter values** — not generating DSL. Instead of asking the LLM "write me a bool query with a match on title, a term filter on category, and a range on price," we ask it "what is the category, and what is the max price?" The template handles the rest.
+
+This shift has a direct impact on latency. Output tokens are the primary bottleneck in LLM response time (`time_to_last_token = TTFT + output_tokens / tokens_per_second`). Generating full DSL produces ~300 output tokens. Filling parameters via a structured tool call produces ~30 tokens — a 10x reduction that translates to sub-second latency instead of 2-5 seconds. Token cost drops proportionally (~250-500 tokens per request vs ~4,000-5,000), and smaller, cheaper models become viable since parameter extraction is a far simpler task than DSL generation.
+
+Custom tools also open the door for the **Query Planner Tool** to select and invoke tools as sub-plans, and work natively with **MCP servers** for external agent orchestration.
+
+### Example — How This Helps an Agent
+
+Without custom tools, an agent handling *"Find red shoes under $50"* must receive the full index mapping, a sample document, and possibly a template as reference in its prompt. The LLM generates a complete bool query with match, term, and range clauses (~300 output tokens, 2-5s). With a custom tool, the agent sees only: `ProductSearchTool(category: string, color: string, price_max: number)`. The LLM returns a single tool call — `ProductSearch(category="shoes", color="red", price_max=50)` — in ~30 tokens, under 1 second. The template renders the DSL server-side, guaranteeing the correct query structure every time.
+
+## 3. Requirements
+
+**Functional:**
+- Users can wrap existing search templates as tools that ML agents can invoke directly
+- The system should minimize setup effort — ideally, pointing at a search template is enough to create a usable tool
+- Tools must be manageable (create, read, update, delete) and shareable across agents
+- Custom tools should appear alongside built-in tools so agents have a unified view of available capabilities
+- At runtime, the tool handles template rendering, type conversion, and search execution — the agent only provides parameter values
+
+**Non-Functional:**
+- Tool creation should not require an LLM in the default path — customers without deployed models should still benefit
+- Tool execution overhead (beyond the search itself) should be negligible
+
+## 4. User Flow
+
+The end-to-end flow involves four steps: creating a search template (standard OpenSearch), registering a custom tool (which auto-extracts parameters and stores the tool definition in a dedicated system index), attaching the tool to an agent, and the agent invoking the tool at runtime. The custom tool definition — including its auto-generated parameter schema — is persisted in the `.plugins-ml-custom-tools` system index, making it reusable across multiple agents.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant OpenSearch
+    participant Index as .plugins-ml-custom-tools
+    participant Agent
+    participant LLM
+
+    User->>OpenSearch: 1. POST _scripts/product_search (create search template)
+    User->>OpenSearch: 2. POST /_plugins/_ml/tools/_create (register custom tool)
+    Note right of OpenSearch: Auto-extracts params from template AST
+    OpenSearch->>Index: Store tool definition + generated params
+    User->>OpenSearch: 3. POST /_plugins/_ml/agents/_register (attach tool to agent)
+    User->>Agent: 4. "Find red shoes under $50"
+    Agent->>LLM: Tool definitions (params only, no DSL)
+    LLM->>Agent: tool_call: ProductSearch(category="shoes", color="red", price_max=50)
+    Agent->>OpenSearch: Render template + execute search
+    OpenSearch->>Agent: Search results
+    Agent->>User: "Here are 12 red shoes under $50..."
 ```
 
 ---
 
-## 2. Design Decisions
+## 5. Approaches for Parameter Definition
 
-### 2.1 Dedicated System Index vs. Extending Existing Storage
+For an LLM to use a tool effectively via function calling, the tool must expose a well-defined parameter schema — each parameter needs a name, type, description, and whether it's required. This schema becomes the `input_schema` (JSON Schema) that the agent presents to the LLM as a function definition. Without it, the LLM has no way to know what inputs the tool expects or how to fill them. The question is: who defines these parameters? Four approaches were considered:
 
-**Decision**: Store custom tools in a new dedicated system index `.plugins-ml-custom-tools`.
+### Approach 1: Manual — User Provides Params
 
-**Alternatives considered**:
-- Storing tool definitions inline within agent configurations
-- Reusing the existing `.plugins-ml-config` index
-
-**Rationale**: A dedicated index provides independent lifecycle management (tools can be shared across agents), clean index mappings tailored to tool metadata, and follows the established pattern in ml-commons where each resource type has its own index (connectors, models, agents, MCP tools all have separate indices). This also enables the tools to be listed, searched, and managed independently.
-
-### 2.2 Tool Name Uniqueness
-
-**Decision**: Tool names must be unique. The system rejects creation of a tool whose name already exists in the custom tools index.
-
-**Alternatives considered**:
-- Allow duplicate names, identify tools by internal document ID only
-- Allow duplicates but warn
-
-**Rationale**: Tools are addressed by name in multiple contexts:
-- The `GET /_plugins/_ml/tools/{tool_name}` endpoint looks up tools by name
-- The `GET /_plugins/_ml/tools` endpoint merges built-in and custom tools by name (deduplication)
-- Agents reference tools by type/name when constructing tool instances
-
-Non-unique names would make GET-by-name non-deterministic and create ambiguity when agents resolve tools. Enforcing uniqueness at creation time makes the system predictable. The uniqueness check queries the custom tools index by `name.keyword` before allowing creation.
-
-### 2.3 Route Path Wildcard Constraint
-
-**Decision**: UPDATE and DELETE routes use `{tool_name}` as the path parameter name (not `{tool_id}`), accepting the internal document ID through a parameter named `tool_name`.
-
-**Context**: OpenSearch's `PathTrie` requires all routes at the same path position to use the same wildcard name. The pre-existing GET route is:
-```
-GET /_plugins/_ml/tools/{tool_name}
-```
-
-Our new routes share the same path prefix:
-```
-PUT    /_plugins/_ml/tools/{tool_name}
-DELETE /_plugins/_ml/tools/{tool_name}
-```
-
-Using `{tool_id}` for PUT/DELETE would cause a startup crash:
-```
-IllegalArgumentException: Trying to use conflicting wildcard names for same path: tool_name and tool_id
-```
-
-**Rationale**: This is an OpenSearch framework constraint, not a design choice. The path parameter name is cosmetic — the handler correctly extracts the value and uses it as a document ID for update/delete operations. The semantic mismatch (parameter named `tool_name` containing a document ID) is contained within the REST layer and doesn't leak into the transport layer.
-
-### 2.4 Merged GET/LIST Response
-
-**Decision**: `GET /_plugins/_ml/tools` and `GET /_plugins/_ml/tools/{name}` return a merged view of built-in tools and custom tools in a single response.
-
-**Alternatives considered**:
-- Separate endpoints for built-in vs. custom tools
-- A query parameter to filter (`?source=custom`)
-
-**Rationale**: From a user/agent perspective, a tool is a tool regardless of whether it's built-in or user-defined. A merged response gives a complete picture of what's available. The implementation checks built-in tools first (in-memory, fast), then falls back to the custom tools index. `ListToolsTransportAction` deduplicates by name (built-in takes precedence) and gracefully degrades — if the custom tools index query fails, it returns only built-in tools rather than failing entirely.
-
-### 2.5 SearchTemplateTool: Template Rendering via ScriptService
-
-**Decision**: The `SearchTemplateTool` renders stored Mustache templates using OpenSearch's core `ScriptService` API (`ScriptService.compile()` + `TemplateScript`), without any direct dependency on the `lang-mustache` module.
-
-**Alternatives considered**:
-- Using `SearchTemplateAction` / `SearchTemplateRequest` from the `lang-mustache` module directly
-- Manual regex-based `{{param}}` substitution
-
-**Rationale**: The `lang-mustache` module is not in ml-commons' dependency graph and **cannot** be added — even as a `compileOnly` dependency. OpenSearch loads the `lang-mustache` module with its own classloader, isolated from the plugin classloader. Attempting to use `SearchTemplateRequest` or `SearchTemplateAction` at runtime results in `NoClassDefFoundError` / `ClassNotFoundException`, regardless of compile-time availability.
-
-The solution uses `ScriptService`, which is part of core OpenSearch. The `MustacheScriptEngine` (from the `lang-mustache` module) registers itself with `ScriptService` at node startup via the `ScriptPlugin` SPI. This means any code with access to `ScriptService` can compile and render stored Mustache templates through:
-
-```java
-Script script = new Script(ScriptType.STORED, null, templateName, Collections.emptyMap());
-TemplateScript compiled = scriptService.compile(script, TemplateScript.CONTEXT).newInstance(params);
-String rendered = compiled.execute();
-```
-
-This approach provides **full Mustache support** — including sections (`{{#param}}...{{/param}}`), inverted sections (`{{^param}}...{{/param}}`), list iteration, and all other Mustache features — without importing any `lang-mustache` classes. The rendered JSON string is then parsed into a `SearchSourceBuilder` and executed via `client.search()`.
-
-### 2.6 Execution Modes
-
-**Decision**: The tool supports three execution modes exposed as a user/LLM parameter:
-- `execute` (default) — renders template, executes search, returns results
-- `render_only` — renders template, returns the DSL query without executing
-- `both` — renders template, executes search, returns both query and results
-
-**Rationale**: Different use cases need different outputs:
-- An agent answering user questions needs search results (`execute`)
-- A debugging/transparency flow needs to see what query was generated (`render_only`)
-- An observability or audit flow needs both (`both`)
-
-Exposing this as a parameter (rather than separate tools) keeps the tool count manageable while giving flexibility. The `execution_mode` parameter is included in the auto-generated `input_schema` so LLMs can discover it.
-
-### 2.7 Parameter Type Conversion
-
-**Decision**: Parameter definitions include a `type` field (`text`, `integer`, `float`, `double`, `boolean`, `long`) that drives automatic type conversion from string inputs.
-
-**Rationale**: LLMs and REST APIs pass all parameters as strings. Search templates often need typed values — e.g., `"size": {{result_size}}` expects an integer, not a quoted string. Without type conversion, the rendered JSON would be `"size": "5"` (invalid) instead of `"size": 5`. The type metadata in parameter definitions enables the tool to convert `"5"` to `5` before template rendering, producing valid JSON.
-
-### 2.8 Validation at Both Create-Time and Run-Time
-
-**Decision**: The search template is validated (confirmed to exist) both when the custom tool is created and when it is executed.
-
-**Alternatives considered**:
-- Validate only at creation time (simpler, but template could be deleted later)
-- Validate only at runtime (allows creating tools for templates that don't exist yet)
-
-**Rationale**: Create-time validation catches typos and configuration errors immediately, giving clear feedback via `GetStoredScriptRequest`. Runtime validation is implicit — if the stored script has been deleted, `ScriptService.compile()` will throw an error when attempting to compile the stored template, providing a clear failure message.
-
-### 2.9 `type` Field Restricted to `search_template`
-
-**Decision**: The `type` field in `MLCustomToolInput` is validated to be exactly `"search_template"`. Any other value is rejected.
-
-**Rationale**: This POC only implements the `SearchTemplateTool` backend. The `type` field is designed to be extensible — future custom tool types (e.g., `"http_connector"`, `"script"`) can be added by relaxing this validation and implementing corresponding `Tool` classes. Restricting to `search_template` for now prevents users from creating tools that can't actually execute.
-
-### 2.10 Multi-Tenancy Support
-
-**Decision**: Follow the same multi-tenancy pattern as connectors — `tenant_id` stored in the index, validated on every CRUD operation via `TenantAwareHelper`.
-
-**Rationale**: Consistency with the existing connector CRUD pattern. The `MLCustomToolInput` carries a `tenantId` field, set from request headers by the REST layer. Transport actions call `TenantAwareHelper.validateTenantId()` before any operation. The index mapping includes `tenant_id` as a keyword field.
-
----
-
-## 3. Architecture
-
-### 3.1 Layered Architecture
-
-```
-REST Layer                    Transport Layer                   Storage
-─────────────────────────     ────────────────────────────      ──────────────────
-RestMLCreateCustomToolAction → CreateCustomToolTransportAction → .plugins-ml-custom-tools
-RestMLUpdateCustomToolAction → UpdateCustomToolTransportAction → .plugins-ml-custom-tools
-RestMLDeleteCustomToolAction → DeleteCustomToolTransportAction → .plugins-ml-custom-tools
-RestMLGetToolAction          → GetToolTransportAction          → ToolFactory (built-in)
-                                                                + .plugins-ml-custom-tools
-RestMLListToolsAction        → ListToolsTransportAction        → ToolFactory (built-in)
-                                                                + .plugins-ml-custom-tools
-```
-
-### 3.2 Tool Execution Flow
-
-```
-Agent._execute(params)
-  └→ SearchTemplateTool.run(params)
-       ├→ validate(params)                        // Check required params
-       ├→ buildScriptParams(params)               // Convert types via paramDefinitions
-       ├→ renderTemplate(scriptParams)             // ScriptService.compile() + TemplateScript.execute()
-       ├→ [if render_only] return rendered DSL
-       ├→ buildSearchRequest(renderedQuery)        // Parse JSON → SearchSourceBuilder
-       ├→ client.search(searchRequest)             // Execute search
-       └→ processSearchResponse()                 // Format hits as JSON
-```
-
-### 3.3 Input Schema Auto-Generation
-
-When `SearchTemplateTool.Factory.create()` builds a tool instance, it converts the parameter definitions into a JSON Schema stored in `attributes["input_schema"]`:
-
-```
-params: {                          input_schema: {
-  "query_text": {                    "type": "object",
-    "type": "text",        →        "properties": {
-    "description": "...",              "query_text": {"type":"string","description":"..."},
-    "required": true                   "execution_mode": {"type":"string","description":"..."}
-  }                                  },
-}                                    "required": ["query_text"]
-                                   }
-```
-
-This schema is used by LLM-based agents (e.g., `conversational` agents) to understand what parameters the tool expects, enabling function-calling style invocations.
-
----
-
-## 4. Files Summary
-
-### New Files (17)
-
-| Layer | File | Purpose |
-|-------|------|---------|
-| Index | `common/src/main/resources/index-mappings/ml_custom_tools.json` | Index mapping for `.plugins-ml-custom-tools` |
-| Model | `common/.../transport/tools/MLCustomToolInput.java` | Data model (parse, serialize, validate) |
-| Transport | `common/.../transport/tools/MLCreateCustomToolAction.java` | Create action type |
-| Transport | `common/.../transport/tools/MLCreateCustomToolRequest.java` | Create request |
-| Transport | `common/.../transport/tools/MLCreateCustomToolResponse.java` | Create response (returns tool_id) |
-| Transport | `common/.../transport/tools/MLUpdateCustomToolAction.java` | Update action type |
-| Transport | `common/.../transport/tools/MLUpdateCustomToolRequest.java` | Update request |
-| Transport | `common/.../transport/tools/MLDeleteCustomToolAction.java` | Delete action type |
-| Transport | `common/.../transport/tools/MLDeleteCustomToolRequest.java` | Delete request |
-| Tool | `ml-algorithms/.../engine/tools/SearchTemplateTool.java` | Tool implementation + Factory |
-| Action | `plugin/.../action/tools/CreateCustomToolTransportAction.java` | Create handler (validate + persist) |
-| Action | `plugin/.../action/tools/UpdateCustomToolTransportAction.java` | Update handler |
-| Action | `plugin/.../action/tools/DeleteCustomToolTransportAction.java` | Delete handler |
-| Helper | `plugin/.../action/tools/CustomToolsHelper.java` | Index search utilities |
-| REST | `plugin/.../rest/RestMLCreateCustomToolAction.java` | POST `/_plugins/_ml/tools/_create` |
-| REST | `plugin/.../rest/RestMLUpdateCustomToolAction.java` | PUT `/_plugins/_ml/tools/{tool_name}` |
-| REST | `plugin/.../rest/RestMLDeleteCustomToolAction.java` | DELETE `/_plugins/_ml/tools/{tool_name}` |
-
-### Modified Files (6)
-
-| File | Change |
-|------|--------|
-| `CommonValue.java` | Added `ML_CUSTOM_TOOLS_INDEX`, `ML_CUSTOM_TOOLS_INDEX_MAPPING_PATH` |
-| `MLIndex.java` | Added `CUSTOM_TOOLS` enum entry |
-| `MLIndicesHandler.java` | Added `initMLCustomToolsIndex()` |
-| `GetToolTransportAction.java` | Falls back to custom tools index if built-in not found |
-| `ListToolsTransportAction.java` | Merges custom tools into response, deduplicates by name |
-| `MachineLearningPlugin.java` | Registers actions, REST handlers, `SearchTemplateTool.Factory`, `CustomToolsHelper` |
-
----
-
-## 5. Validation Rules
-
-| Rule | Where Enforced | Error |
-|------|---------------|-------|
-| Name required | `MLCustomToolInput` constructor | `Custom tool name is required` |
-| Description required | `MLCustomToolInput` constructor | `Custom tool description is required` |
-| Type required | `MLCustomToolInput` constructor | `Custom tool type is required` |
-| Type must be `search_template` | `MLCustomToolInput` constructor | `Custom tool type must be 'search_template'` |
-| Search template name required | `MLCustomToolInput` constructor | `Search template name is required` |
-| Name cannot start with `_` | `CreateCustomToolTransportAction` | `Custom tool name cannot start with '_'` |
-| Name must be unique | `CreateCustomToolTransportAction` | `A custom tool with name '...' already exists` |
-| Search template must exist | `CreateCustomToolTransportAction` | `Search template '...' not found` |
-| Tenant validation | All transport actions | Via `TenantAwareHelper` |
-| Required params at runtime | `SearchTemplateTool.validate()` | `Missing required parameters` |
-| Template exists at runtime | `ScriptService.compile()` (implicit) | Script compilation error if template deleted |
-
----
-
-## 6. LLM-Assisted Parameter Auto-Generation
-
-### 6.1 Motivation
-
-Creating a custom tool requires manually defining every parameter — name, type, description, and whether it's required. For a customer with 20+ templates, this is tedious and error-prone, especially since the template already implicitly contains this information in its Mustache variables and DSL structure.
-
-To reduce setup friction, users can optionally provide a `model_id` during tool creation. The system will fetch the stored template, extract parameters programmatically, call the LLM to infer types and descriptions, and store the generated params alongside the tool.
-
-### 6.2 Interface
-
-**With `model_id` (auto-generate params):**
+The user explicitly defines every parameter in the create request.
 
 ```json
 POST /_plugins/_ml/tools/_create
 {
   "name": "ProductSearchTool",
-  "description": "Search products by category, brand, price, and color.",
   "type": "search_template",
-  "search_template_name": "product_search_v2",
-  "index": "products",
+  "search_template_name": "product_search",
+  "params": {
+    "category":  { "type": "string",  "description": "Product category",  "required": true  },
+    "price_max": { "type": "number",  "description": "Maximum price",     "required": false }
+  }
+}
+```
+
+**Pros:**
+- Full control over every parameter definition
+- No surprises — what you write is what gets stored
+
+**Cons:**
+- Tedious for customers with 20+ templates
+- Error-prone — params must match template variables exactly, typos cause silent failures
+- Duplicates information already present in the template
+
+### Approach 2: AST Parsing — Auto-Extract from Template
+
+Compile the Mustache template using the same `mustache.java` library OpenSearch uses, walk the AST, and programmatically extract:
+- **Variable names** from `ValueCode`, `ToJsonCode`, `JoinerCode` nodes
+- **Required/optional** from section nesting (self-guarding sections, inverted defaults)
+- **Types** from DSL context (quoted = string, unquoted = number, toJson = array, section-only = boolean)
+- **Default values** from inverted sections (`{{^size}}10{{/size}}` -> default "10")
+- **Descriptions** from surrounding DSL context (`"match":{"title":"{{query_text}}"}` -> "Value for the 'title' field (match)")
+
+```json
+POST /_plugins/_ml/tools/_create
+{
+  "name": "ProductSearchTool",
+  "type": "search_template",
+  "search_template_name": "product_search"
+}
+// No params, no model_id — system auto-extracts everything
+```
+
+**Pros:**
+- Zero effort from the user — just provide a template name
+- Deterministic and fast (~10ms, no LLM dependency)
+- No additional cost — no model needed
+
+**Cons:**
+- Descriptions are functional but generic — for example, given the template `"match":{"title":"{{query_text}}"}`, the analyzer generates `"Value for the 'title' field (match)"`. An LLM would produce something more natural like `"Search text to match against product titles using full-text search"`. Similarly, `"size":{{result_size}}` yields `"Value for 'result_size'"` instead of `"Maximum number of search results to return (default 10)"`
+- Type inference is heuristic-based — works well for common patterns but may miss edge cases
+
+### Approach 3: AST Parsing + LLM — Use a Model to Enhance Descriptions
+
+Perform the same AST tree walking as Approach 2 to extract variable names, required/optional, and defaults deterministically. Then pass the template source and the extracted variable list to an LLM, asking it to provide richer type inference and human-quality descriptions for each parameter. The LLM does not determine requiredness or extract variables — that's already handled by the AST.
+
+```json
+POST /_plugins/_ml/tools/_create
+{
+  "name": "ProductSearchTool",
+  "type": "search_template",
+  "search_template_name": "product_search",
   "model_id": "haiku-model-id"
 }
 ```
 
-**With `params` (manual — existing behavior, unchanged):**
+**Pros:**
+- Rich, human-quality descriptions (e.g., "Maximum price in USD for filtering products" instead of "Value for 'price_max'")
+- Better type refinement — LLM can distinguish `float` vs `integer` from semantic context
 
-```json
-POST /_plugins/_ml/tools/_create
-{
-  "name": "ProductSearchTool",
-  "description": "Search products by category, brand, price, and color.",
-  "type": "search_template",
-  "search_template_name": "product_search_v2",
-  "index": "products",
-  "params": {
-    "category":  { "type": "string",  "description": "Product category", "required": true },
-    "price_max": { "type": "number",  "description": "Maximum price",    "required": false }
-  }
-}
+**Cons:**
+- Adds latency (1-3s for the LLM call) to tool creation
+- Requires a deployed model — not always available
+- Non-deterministic — same template may produce slightly different descriptions across calls
+- Hallucination risk on types (mitigated by AST handling required/optional)
+
+### Approach 4 (Recommended): Hybrid — All Three Paths Available
+
+Expose all three approaches as tiers within a single API. The user chooses their level of involvement:
+
+- **Tier 1 (default):** Provide nothing extra — the system auto-extracts everything from the template AST (Approach 2)
+- **Tier 2:** Provide a `model_id` — the system auto-extracts via AST, then enhances descriptions with the LLM (Approach 3)
+- **Tier 3:** Provide `params` manually — the system stores them as-is, no extraction (Approach 1)
+
+This way, customers who want zero friction get it (Tier 1), customers who want polished descriptions can opt in (Tier 2), and customers who want full control can provide their own params (Tier 3). After creation via any tier, users can always correct or refine params via the `PUT` update API.
+
+```mermaid
+flowchart TD
+    A[POST /_plugins/_ml/tools/_create] --> B{What's provided?}
+    B -->|Neither params nor model_id| C[Tier 1: AST-only extraction]
+    B -->|model_id only| D[Tier 2: AST + LLM enhancement]
+    B -->|params only| E[Tier 3: Manual — store as-is]
+    B -->|Both params and model_id| F[Error: mutually exclusive]
+
+    C --> G[Compile template with mustache.java]
+    D --> G
+    G --> H[Walk AST: extract names, types, required, defaults]
+    H --> I{model_id provided?}
+    I -->|No| J[Generate heuristic descriptions]
+    I -->|Yes| K[Call LLM for better types + descriptions]
+    K --> L[Merge: LLM types/descriptions + AST required/defaults]
+    J --> M[Store tool in .plugins-ml-custom-tools index]
+    L --> M
+    E --> M
 ```
 
-**Validation:**
-
-| Field provided | Behavior |
-|---|---|
-| `params` only | Manual — user defines all param schemas (existing behavior) |
-| `model_id` only | Auto — params extracted from template + LLM |
-| Both `params` and `model_id` | Error: `Cannot specify both 'params' and 'model_id'. Use one or the other.` |
-| Neither | Error: `Either 'params' or 'model_id' is required.` |
-
-**Response includes generated params** so the user can immediately review:
-
-```json
-{
-  "tool_id": "abc123",
-  "name": "ProductSearchTool",
-  "params": {
-    "category":  { "type": "string",  "description": "Product category to match against the category field", "required": true },
-    "color":     { "type": "string",  "description": "Product color for term filtering",                     "required": false },
-    "price_max": { "type": "float",   "description": "Maximum price in USD for range filtering",             "required": false }
-  }
-}
-```
-
-If the LLM gets something wrong, the user corrects it via `PUT /_plugins/_ml/tools/{tool_id}`.
-
-### 6.3 Two-Phase Extraction: Programmatic + LLM
-
-Parameter extraction is split into two phases. Phase 1 is deterministic (no LLM needed). Phase 2 uses the LLM only for what requires semantic understanding.
-
-#### Phase 1: Programmatic Extraction (Server-Side Java)
-
-Parse the Mustache template source string to extract:
-
-1. **Variable names** — scan for `{{variable_name}}` patterns, excluding section markers (`{{#`, `{{/`, `{{^`)
-2. **Required vs. optional** — determined by template structure:
-   - A variable that appears ONLY inside a conditional section (`{{#var}}...{{var}}...{{/var}}`) is **optional**
-   - A variable that appears outside any conditional section is **required**
-   - A variable with an inverted section default (`{{^var}}default_value{{/var}}`) is **optional**
-
-**Example:**
-
-```
-Template: {"must":[{"match":{"title":"{{query_text}}"}}]{{#genre}},{"filter":[{"term":{"genre":"{{genre}}"}}]}{{/genre}}},"size":{{result_size}}}
-
-Variables found:  [query_text, genre, result_size]
-Sections found:   [genre]
-
-query_text  → appears outside all sections   → required: true
-genre       → appears only inside {{#genre}} → required: false
-result_size → appears outside all sections   → required: true
-```
-
-This logic is fully deterministic — no LLM involved, no hallucination risk.
-
-#### Phase 2: LLM-Assisted Type and Description Inference
-
-The LLM receives the template source and the pre-extracted variable list, and infers `type` and `description` for each.
-
-**Prompt:**
-
-```
-You are analyzing an OpenSearch Mustache search template to determine parameter types and descriptions.
-
-## Template Source
-{template_source}
-
-## Parameters to Annotate
-The following parameters were extracted from the template. For each one, determine its type and write a description.
-
-Parameters: {extracted_variable_names}
-
-## Instructions
-
-For each parameter, determine:
-
-1. **type**: Infer from how the parameter is used in the query DSL:
-   - "string" — used in match, term, or text field contexts (e.g., "match": {"field": "{{var}}"})
-   - "integer" — used as a bare numeric value without quotes (e.g., "size": {{var}}) or in integer contexts
-   - "float" — used in range queries with decimal values, boost values, or scores
-   - "double" — used for high-precision numeric values
-   - "boolean" — used in boolean contexts (e.g., "track_total_hits": {{var}})
-   - "long" — used for timestamps, epoch values, or large numeric IDs
-   - Default to "string" if the usage context is ambiguous
-
-2. **description**: A clear, concise description of what this parameter controls. Base it on:
-   - The field name it maps to in the index
-   - The query clause it appears in (match, term, range, filter, bool, etc.)
-   - Its role in the query (filtering, scoring, pagination, etc.)
-
-## Important
-- Do NOT add or remove parameters — annotate exactly the list provided
-- Do NOT determine "required" — that is already handled separately
-
-Return ONLY a valid JSON object in this exact format, no other text:
-{
-  "params": {
-    "parameter_name": {
-      "type": "string|integer|long|float|double|boolean",
-      "description": "description of the parameter"
-    }
-  }
-}
-```
-
-**Why this split works:**
-
-| Aspect | Phase 1 (Programmatic) | Phase 2 (LLM) |
-|--------|----------------------|---------------|
-| Variable names | Regex extraction | N/A |
-| Required/optional | Section nesting analysis | N/A |
-| Type | N/A | DSL context inference |
-| Description | N/A | Semantic understanding |
-| Reliability | 100% deterministic | Best-effort, user-reviewable |
-
-The LLM's job is reduced to type inference and description writing — both of which it's good at and both of which are easily reviewable/correctable via `PUT`.
-
-### 6.4 Creation Flow with Auto-Generation
-
-```
-POST /_plugins/_ml/tools/_create (with model_id)
-  │
-  ├→ 1. Validate tenant, name uniqueness, name format (existing)
-  │
-  ├→ 2. Fetch stored script via GetStoredScriptRequest
-  │     └→ Extract template source string
-  │
-  ├→ 3. Phase 1: Programmatic extraction
-  │     ├→ Extract variable names from template
-  │     └→ Determine required/optional from section nesting
-  │
-  ├→ 4. Phase 2: LLM call
-  │     ├→ Build prompt with template source + variable names
-  │     ├→ Call model via MachineLearningNodeClient.predict()
-  │     └→ Parse JSON response → type + description per param
-  │
-  ├→ 5. Merge Phase 1 + Phase 2
-  │     └→ Combine: {name, type (LLM), description (LLM), required (programmatic)}
-  │
-  └→ 6. Store custom tool with generated params (existing indexing flow)
-```
-
-### 6.5 Prompt Walkthrough with Real Template
-
-**Input template** (Shakespeare search):
-```
-{"query":{"bool":{"must":[{"match":{"title":"{{query_text}}"}}]{{#genre}},
-"filter":[{"term":{"genre":"{{genre}}"}}]{{/genre}}}},"size":{{result_size}}}
-```
-
-**Phase 1 output:**
-```
-query_text  → required: true
-genre       → required: false
-result_size → required: true
-```
-
-**Phase 2 prompt sends:**
-```
-Parameters to Annotate: [query_text, genre, result_size]
-```
-
-**Phase 2 LLM response:**
-```json
-{
-  "params": {
-    "query_text":  { "type": "string",  "description": "Text to match against the title field using full-text search" },
-    "genre":       { "type": "string",  "description": "Genre keyword to filter results by (e.g., tragedy, comedy)" },
-    "result_size": { "type": "integer", "description": "Maximum number of search results to return" }
-  }
-}
-```
-
-**Merged final params stored:**
-```json
-{
-  "query_text":  { "type": "string",  "description": "Text to match against the title field using full-text search", "required": true },
-  "genre":       { "type": "string",  "description": "Genre keyword to filter results by (e.g., tragedy, comedy)",   "required": false },
-  "result_size": { "type": "integer", "description": "Maximum number of search results to return",                   "required": true }
-}
-```
-
-### 6.6 Design Decisions
-
-#### 6.6.1 JSON Prompt vs. Forced Tool Call
-
-**Decision**: Use a JSON prompt for the LLM call, not forced tool calls (`tool_choice: "required"`).
-
-**Alternatives considered**:
-- Define a function schema for `extract_parameters` and force the LLM to call it via `tool_choice: "required"`
-
-**Rationale**: The creation flow makes a standalone LLM call via `MachineLearningNodeClient.predict()`, not through the agent loop. The function calling infrastructure (`FunctionCalling` interface, `OpenaiV1ChatCompletionsFunctionCalling`, etc.) is tightly coupled to `MLChatAgentRunner` and the ReAct loop. Reusing it for a one-shot call would require significant refactoring.
-
-A well-structured JSON prompt is sufficient for this use case because:
-- The output schema is simple and fixed (a flat map of param names to type+description)
-- The response is validated and parsed server-side — malformed JSON triggers an error
-- This is a creation-time operation, not a latency-critical query-time call
-- The user reviews and can correct the output via `PUT`
-
-If reliability becomes an issue, forced tool calls can be added as a future enhancement by making the function calling infrastructure available outside the agent loop.
-
-#### 6.6.2 `model_id` and `params` Are Mutually Exclusive
-
-**Decision**: Reject requests that provide both `model_id` and `params`.
-
-**Rationale**: If the user provides manual params, auto-generation is unnecessary. If they want auto-generation, manual params would be overwritten. Mutual exclusion eliminates ambiguity about which source of truth wins.
+**Key principle:** The LLM never determines required/optional — that's structural, not semantic. The AST tells us definitively whether a variable is inside a conditional section. The LLM's role is limited to enriching descriptions and refining types — things it's good at and that are easily reviewable.
 
 ---
 
-## 7. Limitations and Future Work
+## 6. Low-Level Implementation
 
-### Current Limitations
+### 6.1 System Index: `.plugins-ml-custom-tools`
 
-1. **No `custom_tool_id` in agent spec**: Agents reference the tool via `type: "SearchTemplateTool"` with parameters, not by custom tool ID. Adding ID-based resolution requires making `AgentUtils.createTool()` async (significant refactor).
-2. **No search on custom tools**: No dedicated search API (e.g., `POST /_plugins/_ml/tools/_search`). Users can query the index directly if needed.
-3. **Single tool type**: Only `search_template` is supported. The `type` field is validated strictly.
+Custom tools are stored in a dedicated system index, following the same pattern as connectors, models, and agents.
 
-### Future Enhancements
+**Index mapping:**
 
-1. **Agent-level custom tool resolution by ID**: Add `custom_tool_id` to `MLToolSpec` so agents can reference tools by their index ID instead of manually specifying parameters.
-2. **Additional tool types**: Support `http_connector` (arbitrary HTTP calls), `script` (painless scripts), etc. by adding new `Tool` implementations and relaxing the type validation.
-3. **Search API**: Add `POST /_plugins/_ml/tools/_search` for querying custom tools with arbitrary criteria.
-4. **Access control**: Add `backend_roles` and `access_mode` fields (like connectors) for fine-grained access control on custom tools.
+| Field | Type | Notes |
+|---|---|---|
+| `name` | text + keyword | Unique, validated at create time |
+| `description` | text + keyword | Max 512 chars |
+| `type` | keyword | Currently restricted to `"search_template"` |
+| `search_template_name` | keyword | Reference to stored script |
+| `params` | flat_object | Parameter definitions (name -> {type, description, required, default}) |
+| `model_id` | keyword | Optional, for Tier 2 LLM enhancement |
+| `tenant_id` | keyword | Multi-tenancy support |
+| `create_time` | date | Auto-set |
+| `last_update_time` | date | Auto-set on create/update |
+
+### 6.2 CRUD API
+
+```mermaid
+flowchart LR
+    subgraph REST Layer
+        R1[POST /_plugins/_ml/tools/_create]
+        R2[GET /_plugins/_ml/tools/name]
+        R3[GET /_plugins/_ml/tools]
+        R4[PUT /_plugins/_ml/tools/id]
+        R5[DELETE /_plugins/_ml/tools/id]
+    end
+
+    subgraph Transport Layer
+        T1[CreateCustomToolTransportAction]
+        T2[GetToolTransportAction]
+        T3[ListToolsTransportAction]
+        T4[UpdateCustomToolTransportAction]
+        T5[DeleteCustomToolTransportAction]
+    end
+
+    subgraph Storage
+        S1[(.plugins-ml-custom-tools)]
+        S2[ToolFactory - built-in tools]
+    end
+
+    R1 --> T1 --> S1
+    R2 --> T2 --> S2
+    R2 --> T2 --> S1
+    R3 --> T3 --> S2
+    R3 --> T3 --> S1
+    R4 --> T4 --> S1
+    R5 --> T5 --> S1
+```
+
+**GET/LIST merges built-in and custom tools** into a single response. Built-in tools take precedence on name conflicts.
+
+### 6.3 SearchTemplateTool Execution
+
+The tool renders Mustache templates via `ScriptService` (OpenSearch core), avoiding any direct dependency on the `lang-mustache` module.
+
+```mermaid
+flowchart TD
+    A[Agent calls SearchTemplateTool.run] --> B[Validate required params]
+    B --> C[Convert types: string inputs -> typed values]
+    C --> D[ScriptService.compile stored template]
+    D --> E[TemplateScript.execute with params]
+    E --> F{execution_mode?}
+    F -->|render_only| G[Return rendered DSL query]
+    F -->|execute| H[Parse JSON -> SearchSourceBuilder]
+    F -->|both| I[Return query + results]
+    H --> J[client.search]
+    J --> K[Format hits as JSON]
+```
+
+**Type conversion** at runtime: LLMs pass all values as strings. The tool converts based on param definitions (`"5"` -> `5` for integer fields) to produce valid JSON.
+
+**Execution modes:**
+- `execute` (default) — render + search + return results
+- `render_only` — render + return the DSL query (debugging/transparency)
+- `both` — render + search + return both
+
+### 6.4 MustacheTemplateAnalyzer (AST Walker)
+
+The analyzer compiles the template with `mustache.java` (same library OpenSearch uses: `com.github.spullara.mustache.java:compiler:0.9.14`) and recursively walks the Code tree.
+
+**How it handles each AST node type:**
+
+| Node Type | Example | Extraction |
+|---|---|---|
+| `ValueCode` | `{{query_text}}` | Variable name, type from surrounding text context |
+| `IterableCode` | `{{#genre}}...{{/genre}}` | Section controller (boolean if no inner value usage) |
+| `NotIterableCode` | `{{^size}}10{{/size}}` | Inverted default → `required: false`, `default: "10"` |
+| `ToJsonCode` | `{{#toJson}}tags{{/toJson}}` | Array type |
+| `JoinerCode` | `{{#join}}emails{{/join}}` | Array type |
+| `UrlEncoderCode` | `{{#url}}...{{/url}}` | Transparent — recurse into children |
+| `WriteCode` | Literal text | Captured as `precedingText` for type/description inference |
+
+**Type inference from preceding literal text:**
+- Ends with `"` → `string` (quoted value in DSL)
+- Ends with `:` or `,` → `number` (bare value position)
+- Inside toJson/join helper → `array`
+- Section controller with no value usage → `boolean`
+
+**Required/optional logic:**
+- Has inverted default (`{{^var}}default{{/var}}`) → **optional**
+- Section controller only (no `{{var}}` usage) → **optional** (boolean flag)
+- Appears only inside own section (`{{#var}}...{{var}}...{{/var}}`) → **optional** (self-guarding)
+- Appears at root scope with none of the above → **required**
+
+### 6.5 Validation Rules
+
+| Rule | When | Error |
+|---|---|---|
+| Name required | Create | `Custom tool name is required` |
+| Name unique | Create | `A custom tool with name '...' already exists` |
+| Name no `_` prefix | Create | `Custom tool name cannot start with '_'` |
+| Type = `search_template` | Create | `Custom tool type must be 'search_template'` |
+| Template exists | Create | `Search template '...' not found` |
+| params XOR model_id | Create | `Cannot specify both 'params' and 'model_id'` |
+| Required params present | Runtime | `Missing required parameters` |
+
+### 6.6 Files
+
+**New files (17):** Index mapping, data model (`MLCustomToolInput`), transport actions/requests/responses for Create/Update/Delete, `SearchTemplateTool` + Factory, `MustacheTemplateAnalyzer`, REST handlers, `CustomToolsHelper`.
+
+**Modified files (6):** `CommonValue` (constants), `MLIndex` (enum entry), `MLIndicesHandler` (init index), `GetToolTransportAction` (fallback to custom tools), `ListToolsTransportAction` (merge custom tools), `MachineLearningPlugin` (register everything).
+
+---
+
+## 7. Appendix
+
+### 7.1 POC Branch
+
+**Branch:** [`feature/custom-tools`](https://github.com/rithin-pullela-aws/ml-commons/tree/feature/custom-tools)
+
+**How to test:**
+
+```bash
+# 1. Build and start OpenSearch with ml-commons
+./gradlew run
+
+# 2. Create a search template
+curl -X POST 'http://localhost:9200/_scripts/product_search' \
+  -H 'Content-Type: application/json' -d '{
+  "script": {
+    "lang": "mustache",
+    "source": "{\"query\":{\"bool\":{\"must\":[{\"match\":{\"title\":\"{{query_text}}\"}}]{{#category}},\"filter\":[{\"term\":{\"category\":\"{{category}}\"}}]{{/category}}}},\"from\":{{#from}}{{from}}{{/from}}{{^from}}0{{/from}},\"size\":{{#size}}{{size}}{{/size}}{{^size}}20{{/size}}}"
+  }
+}'
+
+# 3. Create a custom tool (Tier 1 — auto-extract params)
+curl -X POST 'http://localhost:9200/_plugins/_ml/tools/_create' \
+  -H 'Content-Type: application/json' -d '{
+  "name": "ProductSearchTool",
+  "description": "Search products with optional category filter and pagination",
+  "type": "search_template",
+  "search_template_name": "product_search"
+}'
+# Response includes auto-generated params:
+# {
+#   "tool_id": "abc123",
+#   "params": {
+#     "query_text": { "type": "string", "description": "Value for the 'title' field (match)", "required": true },
+#     "category":   { "type": "string", "description": "Value for the 'category' field (term)", "required": false },
+#     "from":       { "type": "string", "description": "Value for 'from'", "required": false, "default": "0" },
+#     "size":       { "type": "string", "description": "Value for 'size'", "required": false, "default": "20" }
+#   }
+# }
+
+# 4. Verify: Get the tool
+curl 'http://localhost:9200/_plugins/_ml/tools/ProductSearchTool' | python3 -m json.tool
+
+# 5. List all tools (built-in + custom merged)
+curl 'http://localhost:9200/_plugins/_ml/tools' | python3 -m json.tool
+
+# 6. Register an agent with the custom tool
+curl -X POST 'http://localhost:9200/_plugins/_ml/agents/_register' \
+  -H 'Content-Type: application/json' -d '{
+  "name": "ProductAgent",
+  "type": "conversational",
+  "llm": { "model_id": "<your-model-id>" },
+  "tools": [{
+    "type": "SearchTemplateTool",
+    "parameters": {
+      "search_template_name": "product_search"
+    }
+  }]
+}'
+```
+
+### 7.2 POC: Custom Tools via MCP Server
+
+Custom tools can be exposed as MCP (Model Context Protocol) tools, allowing external agents (Claude, GPT, etc.) to discover and invoke them directly.
+
+```mermaid
+sequenceDiagram
+    participant ExternalAgent as External Agent (Claude/GPT)
+    participant MCP as MCP Server
+    participant OpenSearch
+
+    ExternalAgent->>MCP: tools/list
+    MCP->>OpenSearch: GET /_plugins/_ml/tools
+    OpenSearch->>MCP: Built-in + custom tools with input_schema
+    MCP->>ExternalAgent: Tool definitions (JSON Schema)
+
+    ExternalAgent->>MCP: tools/call ProductSearchTool {category: "shoes", price_max: 50}
+    MCP->>OpenSearch: POST /_plugins/_ml/agents/<id>/_execute
+    OpenSearch->>MCP: Search results
+    MCP->>ExternalAgent: Results
+```
+
+The `input_schema` auto-generated from parameter definitions is already valid JSON Schema, making MCP integration straightforward — the MCP server simply proxies tool definitions and invocations.
+
+### 7.3 Test Results Summary
+
+40 templates tested covering: basic variables, inverted defaults, toJson arrays, self-guarding sections, boolean guards, nested scopes, dot notation, triple braces, helpers (join/url/toJson), and a 15-parameter e-commerce template.
+
+| Category | Templates | Params Extracted | Arrays | Booleans | Defaults |
+|---|---|---|---|---|---|
+| Basic & pagination | 5 | 18 | 1 | 0 | 7 |
+| Filters & guards | 8 | 35 | 3 | 3 | 9 |
+| Helpers & edge cases | 12 | 28 | 8 | 2 | 6 |
+| Complex real-world | 15 | 60+ | 6 | 4 | 15 |
+
+Full results: [PARAM_AUTO_GENERATION_TEST_RESULTS.md](PARAM_AUTO_GENERATION_TEST_RESULTS.md)
+
+### 7.4 Future Work
+
+1. **Agent-level tool resolution by ID** — Add `custom_tool_id` to `MLToolSpec` so agents reference tools by index ID
+2. **Tier 2 LLM enhancement** — Wire up `MachineLearningNodeClient.predict()` for richer descriptions
+3. **Additional tool types** — `http_connector`, `script` (painless), etc.
+4. **Search API** — `POST /_plugins/_ml/tools/_search` for querying custom tools
+5. **Access control** — `backend_roles` and `access_mode` fields for fine-grained permissions
