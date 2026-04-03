@@ -329,4 +329,25 @@ public class QueryPlanningPromptTemplate {
         + "\n"
         + "\"track_total_hits\": {{#track_total_hits}}{{track_total_hits}}{{/track_total_hits}}{{^track_total_hits}}false{{/track_total_hits}}"
         + "}";
+
+    // ==== CUSTOM TOOLS MODE PROMPTS ====
+
+    // Tool selection prompts (single LLM call for tool selection + parameter filling)
+    public static final String TOOL_SELECTION_SYSTEM_PROMPT = """
+        Translate query into tool call. ALWAYS expand search terms with synonyms and fill available parameters.
+
+        Example: "blue laptop" → expand to "blue azure navy laptop notebook computer"
+
+        CRITICAL: Call tool immediately. Do NOT output text.
+        """;
+
+    public static final String TOOL_SELECTION_USER_PROMPT = "User query: ${parameters.question}";
+
+    // Group selection prompts (2 LLM calls: group selection → tool selection)
+    public static final String GROUP_SELECTION_SYSTEM_PROMPT = """
+        Route query to correct tool group. CRITICAL: Call select_group function immediately. Do NOT output text.
+        """;
+
+    public static final String GROUP_SELECTION_USER_PROMPT =
+        "User query: ${parameters.question}\n\nAvailable tool groups:\n${parameters.groups_list}";
 }

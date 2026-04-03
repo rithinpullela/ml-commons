@@ -881,6 +881,9 @@ public class MachineLearningPlugin extends Plugin
             toolFactories.putAll(externalToolFactories);
         }
 
+        // Set toolFactories on QueryPlanningTool.Factory for custom tools mode
+        QueryPlanningTool.Factory.getInstance().setToolFactories(toolFactories);
+
         ToolFactoryWrapper toolFactoryWrapper = new ToolFactoryWrapper(toolFactories);
 
         agentModelsSearcher = new AgentModelsSearcher(toolFactories);

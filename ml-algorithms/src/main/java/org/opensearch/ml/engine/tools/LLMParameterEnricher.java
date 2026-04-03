@@ -122,7 +122,7 @@ public class LLMParameterEnricher {
         // Build the user prompt with template source and extracted params
         String userPrompt = buildUserPrompt(templateSource, astParams);
         params.put("system_prompt", SYSTEM_PROMPT);
-        params.put("prompt", userPrompt);
+        params.put("user_prompt", userPrompt);
 
         // Build and execute the prediction request
         RemoteInferenceInputDataSet inputDataSet = RemoteInferenceInputDataSet.builder().parameters(params).build();

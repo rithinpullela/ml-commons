@@ -17,6 +17,8 @@ import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT_SEARCH_TEMPLATE;
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT_TEMPLATE_SELECTION_SYSTEM_PROMPT;
 import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.DEFAULT_TEMPLATE_SELECTION_USER_PROMPT;
+import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.GROUP_SELECTION_SYSTEM_PROMPT;
+import static org.opensearch.ml.engine.tools.QueryPlanningPromptTemplate.TOOL_SELECTION_SYSTEM_PROMPT;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -37,10 +39,20 @@ import org.opensearch.cluster.metadata.MappingMetadata;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.index.query.QueryBuilders;
+import org.opensearch.ml.common.FunctionName;
+import org.opensearch.ml.common.dataset.remote.RemoteInferenceInputDataSet;
+import org.opensearch.ml.common.input.MLInput;
+import org.opensearch.ml.common.output.model.ModelTensorOutput;
 import org.opensearch.ml.common.spi.tools.Parser;
+import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.common.spi.tools.ToolAnnotation;
 import org.opensearch.ml.common.spi.tools.WithModelTool;
+import org.opensearch.ml.common.transport.prediction.MLPredictionTaskAction;
+import org.opensearch.ml.common.transport.prediction.MLPredictionTaskRequest;
 import org.opensearch.ml.common.utils.ToolUtils;
+import org.opensearch.ml.engine.algorithms.agent.AgentUtils;
+import org.opensearch.ml.engine.function_calling.FunctionCalling;
+import org.opensearch.ml.engine.function_calling.FunctionCallingFactory;
 import org.opensearch.ml.engine.processor.ProcessorChain;
 import org.opensearch.ml.engine.tools.parser.ToolParser;
 import org.opensearch.search.SearchHit;
@@ -75,6 +87,12 @@ public class QueryPlanningTool implements WithModelTool {
     public static final String LLM_GENERATED_TYPE_FIELD = "llmGenerated";
     public static final String USER_SEARCH_TEMPLATES_TYPE_FIELD = "user_templates";
     public static final String SEARCH_TEMPLATES_FIELD = "search_templates";
+    public static final String TOOL_GROUPS_FIELD = "tool_groups";
+    public static final String GROUP_DESCRIPTION_FIELD = "group_description";
+    public static final String SEARCHTEMPLATE_TOOLS_FIELD = "searchTemplate_tools";
+    public static final String GROUP_SELECTION_SYSTEM_PROMPT_FIELD = "group_selection_system_prompt";
+    public static final String GROUP_SELECTION_USER_PROMPT_FIELD = "group_selection_user_prompt";
+    public static final String LLM_INTERFACE_FIELD = "llm_interface";
     public static final String SAMPLE_DOCUMENT_FIELD = "sample_document";
     private static final String CURRENT_TIME_FIELD = "current_time";
     public static final String TEMPLATE_FIELD = "template";
@@ -97,6 +115,11 @@ public class QueryPlanningTool implements WithModelTool {
     private final String generationType;
     @Getter
     private final String searchTemplates;
+    @Getter
+    private final List<ToolGroup> toolGroups; // Null for llmGenerated/search_templates modes
+
+    private final Map<String, Tool.Factory> toolFactories; // For creating tool instances at runtime
+    private final String modelId; // Model ID for direct LLM calls (custom tools mode)
     @Setter
     @Getter
     private String name = TYPE;
@@ -132,11 +155,33 @@ public class QueryPlanningTool implements WithModelTool {
     @Getter
     private Parser outputParser;
 
-    public QueryPlanningTool(String generationType, MLModelTool queryGenerationTool, Client client, String searchTemplates) {
+    @Getter
+    private static class ToolGroup {
+        private final String groupDescription;
+        private final List<String> searchTemplateTools;
+
+        public ToolGroup(String groupDescription, List<String> searchTemplateTools) {
+            this.groupDescription = groupDescription;
+            this.searchTemplateTools = searchTemplateTools;
+        }
+    }
+
+    public QueryPlanningTool(
+        String generationType,
+        MLModelTool queryGenerationTool,
+        Client client,
+        String searchTemplates,
+        List<ToolGroup> toolGroups,
+        Map<String, Tool.Factory> toolFactories,
+        String modelId
+    ) {
         this.generationType = generationType;
         this.queryGenerationTool = queryGenerationTool;
         this.client = client;
         this.searchTemplates = searchTemplates;
+        this.toolGroups = toolGroups;
+        this.toolFactories = toolFactories;
+        this.modelId = modelId;
         this.attributes = new HashMap<>(DEFAULT_ATTRIBUTES);
     }
 
@@ -172,12 +217,20 @@ public class QueryPlanningTool implements WithModelTool {
             }
 
             if (!generationType.equals(USER_SEARCH_TEMPLATES_TYPE_FIELD)) {
-                // Use default search template, skip template selection
+                // llmGenerated mode: use default search template
                 parameters.put(TEMPLATE_FIELD, DEFAULT_SEARCH_TEMPLATE);
                 executeQueryPlanning(parameters, listener);
                 return;
             }
 
+            // user_templates mode: check sub-mode
+            if (toolGroups != null && !toolGroups.isEmpty()) {
+                // Custom tools mode: load tools → route by group → function calling → execute
+                executeCustomToolsPlanning(parameters, listener);
+                return;
+            }
+
+            // Existing search_templates mode continues unchanged...
             // Template Selection, replace user and system prompts
             Map<String, String> templateSelectionParameters = new HashMap<>(parameters);
             templateSelectionParameters
@@ -275,6 +328,471 @@ public class QueryPlanningTool implements WithModelTool {
             }, listener::onFailure));
         } catch (Exception e) {
             log.error("Failed to run QueryPlannerTool", e);
+            listener.onFailure(e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void executeCustomToolsPlanning(Map<String, String> parameters, ActionListener<T> listener) {
+        try {
+            log.info("[LATENCY] Custom tools planning started at {}", System.currentTimeMillis());
+            log.info("Executing custom tools planning mode with {} tool group(s)", toolGroups.size());
+            if (toolGroups.size() == 1) {
+                // Single group: skip group selection, go directly to tool selection
+                ToolGroup group = toolGroups.get(0);
+                log.info("Single group mode, using group: {}", group.getGroupDescription());
+                loadToolsAndExecuteFunctionCalling(group.getSearchTemplateTools(), parameters, listener);
+            } else {
+                // Multiple groups: first select the group via LLM
+                log.info("Multiple groups mode, will select group first");
+                selectGroupThenExecute(parameters, listener);
+            }
+        } catch (Exception e) {
+            log.error("Failed to execute custom tools planning", e);
+            listener.onFailure(e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void loadToolsAndExecuteFunctionCalling(
+        List<String> toolNames,
+        Map<String, String> parameters,
+        ActionListener<T> listener
+    ) {
+        log.info("[LATENCY] Tool loading started at {}", System.currentTimeMillis());
+        log.info("Loading {} custom tools: {}", toolNames.size(), toolNames);
+        // Create resolver for custom tools (handles RBAC)
+        CustomToolResolver resolver = new CustomToolResolver(client);
+
+        // Sequential tool loading - follows AgentUtils.createToolAtIndex pattern
+        List<Map<String, Object>> loadedToolDefs = new ArrayList<>();
+        loadToolAtIndex(resolver, toolNames, 0, loadedToolDefs, ActionListener.wrap(toolDefs -> {
+            log.info("[LATENCY] Tool loading completed at {}", System.currentTimeMillis());
+            log.info("Successfully loaded {} custom tool definitions", toolDefs.size());
+            // All tools loaded, now call LLM for tool selection + param filling
+            callLLMForToolSelection(toolDefs, parameters, listener);
+        }, listener::onFailure));
+    }
+
+    private void loadToolAtIndex(
+        CustomToolResolver resolver,
+        List<String> toolNames,
+        int index,
+        List<Map<String, Object>> loadedToolDefs,
+        ActionListener<List<Map<String, Object>>> listener
+    ) {
+        if (index >= toolNames.size()) {
+            // All tools loaded
+            listener.onResponse(loadedToolDefs);
+            return;
+        }
+
+        String toolName = toolNames.get(index);
+        log.info("[LATENCY] Resolving custom tool '{}' (index {}) at {}", toolName, index, System.currentTimeMillis());
+        resolver.resolve(toolName, ActionListener.wrap(toolDef -> {
+            log.info("[LATENCY] Resolved tool '{}' at {}", toolName, System.currentTimeMillis());
+            loadedToolDefs.add(toolDef);
+            loadToolAtIndex(resolver, toolNames, index + 1, loadedToolDefs, listener);
+        }, e -> {
+            log.error("Failed to resolve custom tool: {}", toolName, e);
+            listener.onFailure(new IllegalArgumentException("Custom tool not found or access denied: " + toolName, e));
+        }));
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void callLLMForToolSelection(
+        List<Map<String, Object>> toolDefs,
+        Map<String, String> parameters,
+        ActionListener<T> listener
+    ) {
+        log.info("[LATENCY] LLM tool selection preparation started at {}", System.currentTimeMillis());
+        try {
+            // Get llm_interface for FunctionCalling
+            String llmInterface = parameters.get(LLM_INTERFACE_FIELD);
+            if (llmInterface == null || llmInterface.isBlank()) {
+                listener.onFailure(new IllegalArgumentException("llm_interface parameter required for custom tools mode"));
+                return;
+            }
+
+            // Create FunctionCalling instance
+            FunctionCalling functionCalling = FunctionCallingFactory.create(llmInterface);
+            if (functionCalling == null) {
+                listener.onFailure(new IllegalArgumentException("Unsupported llm_interface: " + llmInterface));
+                return;
+            }
+
+            // Build function definitions from custom tool schemas using standard format
+            // (works across all FunctionCalling implementations: Bedrock, OpenAI, Gemini, etc.)
+            List<Map<String, Object>> functionDefs = new ArrayList<>();
+            for (Map<String, Object> toolDef : toolDefs) {
+                Map<String, Object> functionDef = new HashMap<>();
+                functionDef.put("name", toolDef.get("name"));
+                functionDef.put("description", toolDef.get("description"));
+
+                // Convert flat params to JSON schema (reuse SearchTemplateTool pattern)
+                Map<String, Object> paramsFlat = (Map<String, Object>) toolDef.get("params");
+                Map<String, Object> schema = convertParamsToJsonSchema(paramsFlat);
+                log.info("Converted tool '{}' params to schema: {}", toolDef.get("name"), gson.toJson(schema));
+
+                // Use standard format: attributes.input_schema (keep as Map, not JSON string)
+                Map<String, Object> attributes = new HashMap<>();
+                attributes.put("input_schema", schema);
+                functionDef.put("attributes", attributes);
+
+                functionDefs.add(functionDef);
+            }
+            log.info("[LATENCY] Schema conversion completed at {}", System.currentTimeMillis());
+            log.info("Built {} function definitions for custom tools", functionDefs.size());
+
+            // Prepare function calling parameters
+            Map<String, String> fcParams = new HashMap<>(parameters);
+
+            // Configure function calling first (sets TOOL_TEMPLATE and tool_configs)
+            functionCalling.configure(fcParams);
+            String toolTemplate = fcParams.get(AgentUtils.TOOL_TEMPLATE);
+            log.info("[LATENCY] Function calling configured at {}", System.currentTimeMillis());
+            log.info("Tool template from function calling: {}", toolTemplate);
+
+            // Transform each tool using the TOOL_TEMPLATE (following AgentUtils.addToolsToFunctionCalling pattern)
+            List<String> transformedTools = new ArrayList<>();
+            for (Map<String, Object> functionDef : functionDefs) {
+                Map<String, Object> toolParams = new HashMap<>();
+                toolParams.put("tool.name", functionDef.get("name"));
+                toolParams.put("tool.description", functionDef.get("description"));
+
+                // Add attributes (like input_schema)
+                Map<String, Object> attributes = (Map<String, Object>) functionDef.get("attributes");
+                if (attributes != null) {
+                    for (Map.Entry<String, Object> entry : attributes.entrySet()) {
+                        toolParams.put("tool.attributes." + entry.getKey(), gson.toJson(entry.getValue()));
+                    }
+                }
+
+                // Apply template transformation
+                StringSubstitutor substitutor = new StringSubstitutor(toolParams);
+                String transformedTool = substitutor.replace(toolTemplate);
+                transformedTools.add(transformedTool);
+            }
+
+            // Join transformed tools and put in _tools parameter
+            String toolsForRequest = String.join(", ", transformedTools);
+            fcParams.put(AgentUtils.TOOLS, toolsForRequest);
+            log.info("[LATENCY] Tool transformation completed at {}", System.currentTimeMillis());
+            log.info("Transformed tools for request: {}", toolsForRequest);
+            log.info("Configured function calling, tool_configs: {}", fcParams.get("tool_configs"));
+
+            // Override tool_choice to force tool call
+            fcParams.put("tool_choice", "required");
+
+            // Set prompts required by connector (always override user input for function calling)
+            fcParams.put(SYSTEM_PROMPT_FIELD, TOOL_SELECTION_SYSTEM_PROMPT);
+            fcParams.put(USER_PROMPT_FIELD, "User query: " + parameters.get(QUESTION_FIELD));
+            log.info("Calling LLM for tool selection with {} tools", functionDefs.size());
+
+            // Build and execute the prediction request directly
+            log.info("[LATENCY] LLM request started at {}", System.currentTimeMillis());
+            RemoteInferenceInputDataSet inputDataSet = RemoteInferenceInputDataSet.builder().parameters(fcParams).build();
+            MLInput mlInput = MLInput.builder().algorithm(FunctionName.REMOTE).inputDataset(inputDataSet).build();
+            MLPredictionTaskRequest request = MLPredictionTaskRequest.builder().modelId(modelId).mlInput(mlInput).build();
+
+            client.execute(MLPredictionTaskAction.INSTANCE, request, ActionListener.wrap(response -> {
+                try {
+                    log.info("[LATENCY] LLM response received at {}", System.currentTimeMillis());
+
+                    // Extract ModelTensorOutput from response
+                    ModelTensorOutput modelOutput = (ModelTensorOutput) response.getOutput();
+                    log.info("Received LLM response for tool selection");
+
+                    // Check if LLM produced text alongside tool call (adds latency)
+                    if (modelOutput != null && modelOutput.getMlModelOutputs() != null && !modelOutput.getMlModelOutputs().isEmpty()) {
+                        Map<String, ?> dataAsMap = modelOutput.getMlModelOutputs().get(0).getMlModelTensors().get(0).getDataAsMap();
+                        if (dataAsMap != null && dataAsMap.containsKey("response")) {
+                            String responseText = String.valueOf(dataAsMap.get("response"));
+                            if (responseText != null && !responseText.trim().isEmpty() && !responseText.equals("null")) {
+                                log
+                                    .warn(
+                                        "LLM produced text response alongside tool call (wastes tokens/latency): '{}'",
+                                        responseText.length() > 100 ? responseText.substring(0, 100) + "..." : responseText
+                                    );
+                            }
+                        }
+                    }
+
+                    // Parse tool call using FunctionCalling.handle() - handles provider-specific formats
+                    List<Map<String, String>> toolCalls = functionCalling.handle(modelOutput, fcParams);
+                    log.info("[LATENCY] Tool call parsing completed at {}", System.currentTimeMillis());
+                    log.info("FunctionCalling.handle() returned {} tool calls", toolCalls != null ? toolCalls.size() : 0);
+
+                    if (toolCalls == null || toolCalls.isEmpty()) {
+                        listener.onFailure(new IllegalArgumentException("LLM did not return a tool call"));
+                        return;
+                    }
+
+                    // Get first tool call (QPT only uses the first tool, others are ignored)
+                    Map<String, String> toolCall = toolCalls.get(0);
+                    String selectedToolName = toolCall.get("tool_name");
+                    String toolInputJson = toolCall.get("tool_input");
+                    log.info("LLM selected tool: '{}' with input: {}", selectedToolName, toolInputJson);
+
+                    if (selectedToolName == null || toolInputJson == null) {
+                        listener.onFailure(new IllegalArgumentException("Tool call missing tool_name or tool_input"));
+                        return;
+                    }
+
+                    // Find selected tool definition
+                    Map<String, Object> selectedToolDef = toolDefs
+                        .stream()
+                        .filter(t -> selectedToolName.equals(t.get("name")))
+                        .findFirst()
+                        .orElse(null);
+
+                    if (selectedToolDef == null) {
+                        listener.onFailure(new IllegalArgumentException("LLM selected unknown tool: " + selectedToolName));
+                        return;
+                    }
+
+                    log.info("Custom tool selected via function calling: {}", selectedToolName);
+
+                    // Execute the selected tool (black box delegation)
+                    executeSelectedCustomTool(selectedToolDef, toolInputJson, listener);
+
+                } catch (Exception e) {
+                    log.error("Failed to parse function calling response", e);
+                    listener.onFailure(new IllegalArgumentException("Failed to parse tool call from LLM response", e));
+                }
+            }, e -> {
+                log.error("[LATENCY] LLM call failed at {}: {}", System.currentTimeMillis(), e.getMessage());
+                listener.onFailure(e);
+            }));
+
+        } catch (Exception e) {
+            log.error("Failed to call LLM for tool selection", e);
+            listener.onFailure(e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void executeSelectedCustomTool(Map<String, Object> toolDef, String toolInputJson, ActionListener<T> listener) {
+        log.info("[LATENCY] Tool execution started at {}", System.currentTimeMillis());
+        try {
+            String toolName = (String) toolDef.get("name");
+            log.info("Executing selected custom tool: {}", toolName);
+
+            // Parse LLM-filled parameters
+            Map<String, String> filledParams = gson.fromJson(toolInputJson, new TypeToken<Map<String, String>>() {
+            }.getType());
+            log.info("Parsed LLM-filled parameters: {}", filledParams);
+
+            // QPT is a query planning tool - always render templates without executing
+            // SearchTemplateTool.run() enforces this at line 145-152
+            filledParams.put(SearchTemplateTool.EXECUTION_MODE_FIELD, SearchTemplateTool.EXECUTION_MODE_RENDER_ONLY);
+
+            // Get tool factory (SearchTemplateTool for all custom tools)
+            Tool.Factory<?> toolFactory = toolFactories.get(SearchTemplateTool.TYPE);
+            log.info("Using SearchTemplateTool factory for custom tool: {}", toolDef.get("name"));
+
+            if (toolFactory == null) {
+                listener.onFailure(new IllegalArgumentException("Tool factory not found for type: " + SearchTemplateTool.TYPE));
+                return;
+            }
+
+            // Build factory params - follows AgentUtils.createToolAtIndex pattern (lines 1034-1042)
+            Map<String, Object> factoryParams = new HashMap<>(filledParams);
+            factoryParams.put(SearchTemplateTool.SEARCH_TEMPLATE_NAME_FIELD, toolDef.get("search_template_name"));
+            factoryParams.put(SearchTemplateTool.PARAMS_FIELD, toolDef.get("params"));
+
+            // Index name required by SearchTemplateTool factory (even for render_only mode)
+            if (toolDef.get("index") != null) {
+                factoryParams.put(SearchTemplateTool.INDEX_FIELD, toolDef.get("index"));
+            }
+
+            // Create tool instance (lazy instantiation - follows agent pattern)
+            Tool tool = toolFactory.create(factoryParams);
+            log.info("[LATENCY] Tool instance created at {}", System.currentTimeMillis());
+
+            // Set description from stored custom tool (AgentUtils pattern line 1044-1050)
+            // Purpose: tool metadata for logging, introspection, future extensibility
+            String description = (String) toolDef.get("description");
+            if (description != null) {
+                tool.setDescription(description);
+            }
+
+            // Validate parameters
+            if (!tool.validate(filledParams)) {
+                listener.onFailure(new IllegalArgumentException("Invalid parameters for tool: " + toolDef.get("name")));
+                return;
+            }
+            log.info("[LATENCY] Tool validation completed at {}", System.currentTimeMillis());
+
+            // Execute tool - returns rendered DSL only (execution_mode="render_only")
+            // SearchTemplateTool.run() branches at line 152 to respondWithResult(renderedQuery)
+            log.info("[LATENCY] Tool.run() started at {}", System.currentTimeMillis());
+            log.info("Calling SearchTemplateTool.run() with execution_mode=render_only");
+            tool.run(filledParams, ActionListener.wrap(result -> {
+                log.info("[LATENCY] Tool.run() completed at {}", System.currentTimeMillis());
+                log.info("SearchTemplateTool returned rendered query DSL");
+                // Return DSL string (no search results, just the query)
+                listener.onResponse((T) (outputParser != null ? outputParser.parse(result) : result));
+            }, listener::onFailure));
+
+        } catch (Exception e) {
+            log.error("Failed to execute custom tool", e);
+            listener.onFailure(e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> convertParamsToJsonSchema(Map<String, Object> paramsFlat) {
+        Map<String, Object> schema = new HashMap<>();
+        schema.put("type", "object");
+
+        Map<String, Object> properties = new HashMap<>();
+        List<String> required = new ArrayList<>();
+
+        for (Map.Entry<String, Object> entry : paramsFlat.entrySet()) {
+            String paramName = entry.getKey();
+            Map<String, Object> paramDef = (Map<String, Object>) entry.getValue();
+
+            // Build property definition
+            Map<String, Object> prop = new HashMap<>();
+            prop.put("type", paramDef.getOrDefault("type", "string"));
+            if (paramDef.containsKey("description")) {
+                prop.put("description", paramDef.get("description"));
+            }
+            properties.put(paramName, prop);
+
+            // Track required params
+            Object reqObj = paramDef.get("required");
+            boolean isRequired = reqObj instanceof Boolean ? (Boolean) reqObj : Boolean.parseBoolean(String.valueOf(reqObj));
+            if (isRequired) {
+                required.add(paramName);
+            }
+        }
+
+        schema.put("properties", properties);
+        if (!required.isEmpty()) {
+            schema.put("required", required);
+        }
+
+        return schema;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void selectGroupThenExecute(Map<String, String> parameters, ActionListener<T> listener) {
+        log.info("[LATENCY] Group selection started at {}", System.currentTimeMillis());
+        try {
+            // Get llm_interface for FunctionCalling
+            String llmInterface = parameters.get(LLM_INTERFACE_FIELD);
+            FunctionCalling functionCalling = FunctionCallingFactory.create(llmInterface);
+
+            // Build a simple "select_group" function to force structured output
+            Map<String, Object> selectGroupFunction = new HashMap<>();
+            selectGroupFunction.put("name", "select_group");
+            selectGroupFunction.put("description", "Select the most relevant tool group for the user's query");
+
+            Map<String, Object> schema = new HashMap<>();
+            schema.put("type", "object");
+            Map<String, Object> props = new HashMap<>();
+            props
+                .put(
+                    "group_index",
+                    Map
+                        .of(
+                            "type",
+                            "integer",
+                            "description",
+                            "Index of the selected group (0-" + (toolGroups.size() - 1) + ")",
+                            "minimum",
+                            0,
+                            "maximum",
+                            toolGroups.size() - 1
+                        )
+                );
+            schema.put("properties", props);
+            schema.put("required", List.of("group_index"));
+            selectGroupFunction.put("parameters", schema);
+
+            // Configure function calling
+            Map<String, String> fcParams = new HashMap<>(parameters);
+            fcParams.put(AgentUtils.TOOLS, gson.toJson(List.of(selectGroupFunction)));
+            functionCalling.configure(fcParams);
+            fcParams.put("tool_choice", "required"); // Force tool call
+
+            // Build prompt with group descriptions
+            StringBuilder groupsList = new StringBuilder();
+            for (int i = 0; i < toolGroups.size(); i++) {
+                groupsList.append(i).append(". ").append(toolGroups.get(i).getGroupDescription()).append("\n");
+            }
+
+            // Set prompts required by connector (always override user input for function calling)
+            fcParams.put(SYSTEM_PROMPT_FIELD, GROUP_SELECTION_SYSTEM_PROMPT);
+            fcParams.put(USER_PROMPT_FIELD, "User query: " + parameters.get(QUESTION_FIELD) + "\n\nAvailable tool groups:\n" + groupsList);
+
+            // Build and execute the prediction request directly
+            log.info("[LATENCY] Group selection LLM request started at {}", System.currentTimeMillis());
+            RemoteInferenceInputDataSet inputDataSet = RemoteInferenceInputDataSet.builder().parameters(fcParams).build();
+            MLInput mlInput = MLInput.builder().algorithm(FunctionName.REMOTE).inputDataset(inputDataSet).build();
+            MLPredictionTaskRequest request = MLPredictionTaskRequest.builder().modelId(modelId).mlInput(mlInput).build();
+
+            client.execute(MLPredictionTaskAction.INSTANCE, request, ActionListener.wrap(response -> {
+                try {
+                    log.info("[LATENCY] Group selection LLM response received at {}", System.currentTimeMillis());
+
+                    // Extract ModelTensorOutput from response
+                    ModelTensorOutput modelOutput = (ModelTensorOutput) response.getOutput();
+                    log.info("Received LLM response for group selection");
+
+                    // Check if LLM produced text alongside tool call (adds latency)
+                    if (modelOutput != null && modelOutput.getMlModelOutputs() != null && !modelOutput.getMlModelOutputs().isEmpty()) {
+                        Map<String, ?> dataAsMap = modelOutput.getMlModelOutputs().get(0).getMlModelTensors().get(0).getDataAsMap();
+                        if (dataAsMap != null && dataAsMap.containsKey("response")) {
+                            String responseText = String.valueOf(dataAsMap.get("response"));
+                            if (responseText != null && !responseText.trim().isEmpty() && !responseText.equals("null")) {
+                                log
+                                    .warn(
+                                        "LLM produced text response alongside tool call in group selection (wastes tokens/latency): '{}'",
+                                        responseText.length() > 100 ? responseText.substring(0, 100) + "..." : responseText
+                                    );
+                            }
+                        }
+                    }
+
+                    List<Map<String, String>> toolCalls = functionCalling.handle(modelOutput, fcParams);
+
+                    if (toolCalls == null || toolCalls.isEmpty()) {
+                        listener.onFailure(new IllegalArgumentException("LLM did not call select_group function"));
+                        return;
+                    }
+
+                    // Parse group_index from tool call
+                    String toolInputJson = toolCalls.get(0).get("tool_input");
+                    Map<String, Object> input = gson.fromJson(toolInputJson, new TypeToken<Map<String, Object>>() {
+                    }.getType());
+                    int selectedIndex = ((Number) input.get("group_index")).intValue();
+
+                    if (selectedIndex < 0 || selectedIndex >= toolGroups.size()) {
+                        listener
+                            .onFailure(
+                                new IllegalArgumentException(
+                                    "Invalid group index: " + selectedIndex + " (valid range: 0-" + (toolGroups.size() - 1) + ")"
+                                )
+                            );
+                        return;
+                    }
+
+                    ToolGroup selectedGroup = toolGroups.get(selectedIndex);
+                    log.info("[LATENCY] Group selection completed at {}", System.currentTimeMillis());
+                    log.info("Group selected via function calling: {} (index {})", selectedGroup.getGroupDescription(), selectedIndex);
+
+                    loadToolsAndExecuteFunctionCalling(selectedGroup.getSearchTemplateTools(), parameters, listener);
+
+                } catch (Exception e) {
+                    listener.onFailure(new IllegalArgumentException("Failed to parse group selection", e));
+                }
+            }, listener::onFailure));
+
+        } catch (Exception e) {
+            log.error("Failed to execute group selection", e);
             listener.onFailure(e);
         }
     }
@@ -400,7 +918,12 @@ public class QueryPlanningTool implements WithModelTool {
 
     public static class Factory implements WithModelTool.Factory<QueryPlanningTool> {
         private Client client;
+        private Map<String, Tool.Factory> toolFactories;
         private static volatile Factory INSTANCE;
+
+        public void setToolFactories(Map<String, Tool.Factory> toolFactories) {
+            this.toolFactories = toolFactories;
+        }
 
         public static Factory getInstance() {
             if (INSTANCE != null) {
@@ -442,20 +965,51 @@ public class QueryPlanningTool implements WithModelTool {
                 );
             }
 
-            // Parse search templates if generation type is user_templates
+            // Parse search templates or tool groups if generation type is user_templates
             String searchTemplates = null;
+            List<ToolGroup> toolGroups = null;
+
             if (USER_SEARCH_TEMPLATES_TYPE_FIELD.equals(type)) {
-                if (!params.containsKey(SEARCH_TEMPLATES_FIELD)) {
-                    throw new IllegalArgumentException("search_templates field is required when generation_type is 'user_templates'");
-                } else {
-                    // array is parsed as a json string
+                boolean hasSearchTemplates = params.containsKey(SEARCH_TEMPLATES_FIELD);
+                boolean hasToolGroups = params.containsKey(TOOL_GROUPS_FIELD);
+
+                // Mutual exclusion validation
+                if (hasSearchTemplates && hasToolGroups) {
+                    throw new IllegalArgumentException("Cannot specify both 'search_templates' and 'tool_groups'");
+                }
+
+                if (!hasSearchTemplates && !hasToolGroups) {
+                    throw new IllegalArgumentException(
+                        "generation_type 'user_templates' requires either 'search_templates' or 'tool_groups'"
+                    );
+                }
+
+                if (hasSearchTemplates) {
+                    // Existing search_templates mode
                     String searchTemplatesJson = (String) params.get(SEARCH_TEMPLATES_FIELD);
                     validateSearchTemplates(searchTemplatesJson);
                     searchTemplates = gson.toJson(searchTemplatesJson);
+                } else {
+                    // New tool_groups mode - validate llm_interface required
+                    if (!params.containsKey(LLM_INTERFACE_FIELD) || ((String) params.get(LLM_INTERFACE_FIELD)).isBlank()) {
+                        throw new IllegalArgumentException("llm_interface is required when using tool_groups mode for function calling");
+                    }
+                    toolGroups = parseAndValidateToolGroups(params.get(TOOL_GROUPS_FIELD));
                 }
             }
 
-            QueryPlanningTool queryPlanningTool = new QueryPlanningTool(type, queryGenerationTool, client, searchTemplates);
+            // Extract modelId for direct LLM calls (custom tools mode)
+            String modelId = (String) params.get(MODEL_ID_FIELD);
+
+            QueryPlanningTool queryPlanningTool = new QueryPlanningTool(
+                type,
+                queryGenerationTool,
+                client,
+                searchTemplates,
+                toolGroups,
+                this.toolFactories,
+                modelId
+            );
 
             // Create parser with default extract_json processor + any custom processors
             queryPlanningTool.setOutputParser(createParserWithDefaultExtractJson(params));
@@ -510,6 +1064,35 @@ public class QueryPlanningTool implements WithModelTool {
             if (templateDescription == null || templateDescription.isBlank()) {
                 throw new IllegalArgumentException("search_templates field entries must have a template_description");
             }
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<ToolGroup> parseAndValidateToolGroups(Object toolGroupsObj) {
+            List<Map<String, Object>> groupsJson = gson.fromJson(toolGroupsObj.toString(), new TypeToken<List<Map<String, Object>>>() {
+            }.getType());
+
+            if (groupsJson == null || groupsJson.isEmpty()) {
+                throw new IllegalArgumentException("tool_groups cannot be empty");
+            }
+
+            List<ToolGroup> toolGroups = new ArrayList<>();
+            for (int i = 0; i < groupsJson.size(); i++) {
+                Map<String, Object> group = groupsJson.get(i);
+
+                String description = (String) group.get(GROUP_DESCRIPTION_FIELD);
+                if (description == null || description.isBlank()) {
+                    throw new IllegalArgumentException("tool_groups[" + i + "] missing 'group_description'");
+                }
+
+                List<String> tools = (List<String>) group.get(SEARCHTEMPLATE_TOOLS_FIELD);
+                if (tools == null || tools.isEmpty()) {
+                    throw new IllegalArgumentException("tool_groups[" + i + "] missing 'searchTemplate_tools' array");
+                }
+
+                toolGroups.add(new ToolGroup(description, tools));
+            }
+
+            return toolGroups;
         }
 
         @Override
