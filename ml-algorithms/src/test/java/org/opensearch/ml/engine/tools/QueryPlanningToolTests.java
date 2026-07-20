@@ -1623,6 +1623,60 @@ public class QueryPlanningToolTests {
 
     @SneakyThrows
     @Test
+    public void testRun_WithMalformedFallbackQuery_Fails() throws ExecutionException, InterruptedException {
+        mockSampleDoc();
+        mockGetIndexMapping();
+
+        doAnswer(invocation -> {
+            ActionListener<String> listener = invocation.getArgument(1);
+            listener.onResponse("null");
+            return null;
+        }).when(queryGenerationTool).run(any(), any());
+
+        String malformedFallbackQuery = "THIS IS NOT VALID JSON {{{";
+        QueryPlanningTool tool = new QueryPlanningTool(LLM_GENERATED_TYPE_FIELD, queryGenerationTool, client, null, malformedFallbackQuery);
+        final CompletableFuture<String> future = new CompletableFuture<>();
+        ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
+        validParams.put("question", "help me find some books related to wind");
+        validParams.put(INDEX_NAME_FIELD, "testIndex");
+        tool.run(validParams, listener);
+
+        actionListenerCaptor.getValue().onResponse(getIndexResponse);
+
+        ExecutionException ex = assertThrows(ExecutionException.class, future::get);
+        assertTrue(ex.getCause() instanceof IllegalArgumentException);
+        assertTrue(ex.getCause().getMessage().contains("fallback_query"));
+    }
+
+    @SneakyThrows
+    @Test
+    public void testRun_SubstitutionProducesInvalidJson_WithFallbackQuery_Fails() throws ExecutionException, InterruptedException {
+        mockSampleDoc();
+        mockGetIndexMapping();
+
+        doAnswer(invocation -> {
+            ActionListener<String> listener = invocation.getArgument(1);
+            listener.onResponse("null");
+            return null;
+        }).when(queryGenerationTool).run(any(), any());
+
+        String customFallbackQuery = "{\"query\":{\"match\":{\"title\":\"${parameters.question}\"}}}";
+        QueryPlanningTool tool = new QueryPlanningTool(LLM_GENERATED_TYPE_FIELD, queryGenerationTool, client, null, customFallbackQuery);
+        final CompletableFuture<String> future = new CompletableFuture<>();
+        ActionListener<String> listener = ActionListener.wrap(future::complete, future::completeExceptionally);
+        validParams.put("question", "books \"about\" wind");
+        validParams.put(INDEX_NAME_FIELD, "testIndex");
+        tool.run(validParams, listener);
+
+        actionListenerCaptor.getValue().onResponse(getIndexResponse);
+
+        ExecutionException ex = assertThrows(ExecutionException.class, future::get);
+        assertTrue(ex.getCause() instanceof IllegalArgumentException);
+        assertTrue(ex.getCause().getMessage().contains("fallback_query"));
+    }
+
+    @SneakyThrows
+    @Test
     public void testRun_PredictionReturnsEmpty_WithFallbackQuery_ReturnsFallbackQuery() throws ExecutionException, InterruptedException {
         mockSampleDoc();
         mockGetIndexMapping();
@@ -1827,6 +1881,27 @@ public class QueryPlanningToolTests {
 
         assertNotNull(tool);
         assertEquals("{\"query\":{\"match\":{\"title\":\"${parameters.question}\"}}}", tool.getFallbackQuery());
+    }
+
+    @Test
+    public void testFactory_CreateWithMalformedFallbackQuery_Throws() {
+        Map<String, Object> params = new HashMap<>();
+        params.put(MODEL_ID_FIELD, "test-model-id");
+        params.put(FALLBACK_QUERY_FIELD, "THIS IS NOT VALID JSON {{{");
+
+        Exception exception = assertThrows(IllegalArgumentException.class, () -> QueryPlanningTool.Factory.getInstance().create(params));
+        assertEquals("fallback_query must be valid JSON", exception.getMessage());
+    }
+
+    @Test
+    public void testFactory_CreateWithNumericPlaceholderFallbackQuery_Succeeds() {
+        Map<String, Object> params = new HashMap<>();
+        params.put(MODEL_ID_FIELD, "test-model-id");
+        params.put(FALLBACK_QUERY_FIELD, "{\"size\":${parameters.result_size},\"query\":{\"match\":{\"title\":\"${parameters.question}\"}}}");
+
+        QueryPlanningTool tool = QueryPlanningTool.Factory.getInstance().create(params);
+
+        assertNotNull(tool);
     }
 
     @Test
