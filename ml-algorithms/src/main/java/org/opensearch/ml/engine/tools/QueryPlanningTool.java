@@ -8,6 +8,7 @@ package org.opensearch.ml.engine.tools;
 import static org.opensearch.action.support.clustermanager.ClusterManagerNodeRequest.DEFAULT_CLUSTER_MANAGER_NODE_TIMEOUT;
 import static org.opensearch.ml.common.CommonValue.TOOL_INPUT_SCHEMA_FIELD;
 import static org.opensearch.ml.common.utils.StringUtils.gson;
+import static org.opensearch.ml.common.utils.StringUtils.isJson;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.AGENT_LLM_MODEL_ID;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.DEFAULT_DATETIME_FORMAT;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.getCurrentDateTime;
@@ -277,6 +278,13 @@ public class QueryPlanningTool implements WithModelTool {
                                 log.debug("Model failed to generate the DSL query, returning the fallback query");
                                 StringSubstitutor substitutor = new StringSubstitutor(parameters, "${parameters.", "}");
                                 String defaultQueryString = substitutor.replace(effectiveFallbackQuery);
+                                if (!isJson(defaultQueryString)) {
+                                    listener
+                                        .onFailure(
+                                            new IllegalArgumentException("fallback_query did not produce valid JSON after substitution")
+                                        );
+                                    return;
+                                }
                                 listener.onResponse((T) defaultQueryString);
                             } else {
                                 listener.onResponse((T) (outputParser != null ? outputParser.parse(queryString) : queryString));
@@ -494,6 +502,7 @@ public class QueryPlanningTool implements WithModelTool {
             }
 
             String fallbackQuery = params.containsKey(FALLBACK_QUERY_FIELD) ? (String) params.get(FALLBACK_QUERY_FIELD) : null;
+            validateFallbackQuery(fallbackQuery);
 
             QueryPlanningTool queryPlanningTool = new QueryPlanningTool(type, queryGenerationTool, client, searchTemplates, fallbackQuery);
 
@@ -527,6 +536,15 @@ public class QueryPlanningTool implements WithModelTool {
 
             // Create parser using the combined processor configs
             return ToolParser.createProcessingParser(null, combinedProcessorConfigs);
+        }
+
+        private void validateFallbackQuery(String fallbackQuery) {
+            if (fallbackQuery == null || fallbackQuery.contains("${")) {
+                return;
+            }
+            if (!isJson(fallbackQuery)) {
+                throw new IllegalArgumentException("fallback_query must be valid JSON");
+            }
         }
 
         private void validateSearchTemplates(Object searchTemplatesObj) {
